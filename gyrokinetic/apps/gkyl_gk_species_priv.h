@@ -111,6 +111,14 @@ void gk_species_calc_integ_mom_dt(
   gkyl_gyrokinetic_app *app, struct gk_species *gks, double dt, struct gkyl_array **fdot_integ_mom
 );
 
+void gk_species_scale_integ_mom_dt_enabled(
+  gkyl_gyrokinetic_app *app, struct gk_species *gks, double fac, struct gkyl_array **fdot_integ_mom
+);
+
+void gk_species_scale_integ_mom_dt_disabled(
+  gkyl_gyrokinetic_app *app, struct gk_species *gks, double fac, struct gkyl_array **fdot_integ_mom
+);
+
 void gk_species_calc_integrated_mom_dynamic(
   gkyl_gyrokinetic_app *app, struct gk_species *gks, double tm
 );

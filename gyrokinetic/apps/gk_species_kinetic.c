@@ -748,8 +748,10 @@ gk_species_kinetic_init_dynamic(
   gks->write_L2norm_func = gk_species_write_L2norm_dynamic;
   if (gks->time_rate_diags) {
     gks->calc_integ_mom_dt_func = gk_species_calc_integ_mom_dt_enabled;
+    gks->scale_integ_mom_dt_func = gk_species_scale_integ_mom_dt_enabled;
   } else {
     gks->calc_integ_mom_dt_func = gk_species_calc_integ_mom_dt_disabled;
+    gks->scale_integ_mom_dt_func = gk_species_scale_integ_mom_dt_disabled;
   }
 }
 

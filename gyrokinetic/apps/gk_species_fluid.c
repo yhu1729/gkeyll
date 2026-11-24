@@ -74,6 +74,7 @@ gk_species_fluid_init_dynamic(gkyl_gyrokinetic_app *app, struct gk_species *gks)
   gks->calc_L2norm_func = gk_species_calc_L2norm_static;
   gks->write_L2norm_func = gk_species_write_L2norm_static;
   gks->calc_integ_mom_dt_func = gk_species_calc_integ_mom_dt_disabled;
+  gks->scale_integ_mom_dt_func = gk_species_scale_integ_mom_dt_disabled;
 }
 
 static void

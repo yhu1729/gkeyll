@@ -196,6 +196,33 @@ gk_field_calc_energy_dt_none(
 }
 
 static void
+gk_field_scale_energy_dt_old_active(
+  gkyl_gyrokinetic_app *app, const struct gk_field *field, double fac
+)
+{
+  // Each energy is a single number, so copy it to the host and back on GPUs.
+  double *energies[2] = {field->em_energy_red_old, field->bg_energy_red_old};
+  for (int k = 0; k < 2; ++k) {
+    double energy_ho[1];
+    if (app->use_gpu) {
+      gkyl_cu_memcpy(energy_ho, energies[k], sizeof(double), GKYL_CU_MEMCPY_D2H);
+      energy_ho[0] *= fac;
+      gkyl_cu_memcpy(energies[k], energy_ho, sizeof(double), GKYL_CU_MEMCPY_H2D);
+    } else {
+      energies[k][0] *= fac;
+    }
+  }
+}
+
+static void
+gk_field_scale_energy_dt_old_none(
+  gkyl_gyrokinetic_app *app, const struct gk_field *field, double fac
+)
+{
+  // Do nothing.
+}
+
+static void
 gk_field_calc_energy_enabled(
   struct gkyl_gyrokinetic_app *app, const struct gk_field *field, double tm
 )
@@ -227,6 +254,7 @@ gk_field_energy_dt_new(struct gkyl_gyrokinetic_app *app, struct gk_field *gkf)
   // Energies/dt at the beginning and end of a time step, for the energy rate
   // diagnostic and the energy balance of the app.
   gkf->calc_energy_dt_func = gk_field_calc_energy_dt_active;
+  gkf->scale_energy_dt_old_func = gk_field_scale_energy_dt_old_active;
   gkf->em_energy_red_old = gkyl_calloc_hodev(app->use_gpu, 1, sizeof(double));
   gkf->em_energy_red_new = gkyl_calloc_hodev(app->use_gpu, 1, sizeof(double));
   gkf->bg_energy_red = gkyl_calloc_hodev(app->use_gpu, 1, sizeof(double));
@@ -248,6 +276,7 @@ gk_field_energy_new(struct gkyl_gyrokinetic_app *app, struct gk_field *gkf)
 
   gkf->calc_energy_func = gk_field_calc_energy_enabled;
   gkf->calc_energy_dt_func = gk_field_calc_energy_dt_none;
+  gkf->scale_energy_dt_old_func = gk_field_scale_energy_dt_old_none;
   gkf->energy_bg_func = gk_field_energy_bg_none;
 
   // The energy balance of the app needs the energy rate diagnostic and the
@@ -271,6 +300,7 @@ static void
 gk_field_energy_dt_release(const struct gkyl_gyrokinetic_app *app, struct gk_field *gkf)
 {
   gkf->calc_energy_dt_func = gk_field_calc_energy_dt_none;
+  gkf->scale_energy_dt_old_func = gk_field_scale_energy_dt_old_none;
   gkyl_free_hodev(app->use_gpu, gkf->em_energy_red_old);
   gkyl_free_hodev(app->use_gpu, gkf->em_energy_red_new);
   gkyl_free_hodev(app->use_gpu, gkf->bg_energy_red);
@@ -419,6 +449,12 @@ gk_field_calc_energy_dt(
 )
 {
   field->calc_energy_dt_func(app, field, dt, is_old);
+}
+
+void
+gk_field_scale_energy_dt_old(gkyl_gyrokinetic_app *app, const struct gk_field *field, double fac)
+{
+  field->scale_energy_dt_old_func(app, field, fac);
 }
 
 void

@@ -498,6 +498,31 @@ gk_species_calc_integ_mom_dt(
 }
 
 void
+gk_species_scale_integ_mom_dt_enabled(
+  gkyl_gyrokinetic_app *app, struct gk_species *gks, double fac, struct gkyl_array **fdot_integ_mom
+)
+{
+  for (int m = 0; m < gks->fdot_integ_moms.num; m++) {
+    gkyl_array_scale(fdot_integ_mom[m], fac);
+  }
+}
+
+void
+gk_species_scale_integ_mom_dt_disabled(
+  gkyl_gyrokinetic_app *app, struct gk_species *gks, double fac, struct gkyl_array **fdot_integ_mom
+)
+{
+}
+
+void
+gk_species_scale_integ_mom_dt(
+  gkyl_gyrokinetic_app *app, struct gk_species *gks, double fac, struct gkyl_array **fdot_integ_mom
+)
+{
+  gks->scale_integ_mom_dt_func(app, gks, fac, fdot_integ_mom);
+}
+
+void
 gk_species_calc_integrated_mom_dynamic(gkyl_gyrokinetic_app *app, struct gk_species *gks, double tm)
 {
   struct timespec wst = gkyl_wall_clock();
@@ -648,6 +673,7 @@ gk_species_init_static(
   gks->calc_L2norm_func = gk_species_calc_L2norm_static;
   gks->write_L2norm_func = gk_species_write_L2norm_static;
   gks->calc_integ_mom_dt_func = gk_species_calc_integ_mom_dt_disabled;
+  gks->scale_integ_mom_dt_func = gk_species_scale_integ_mom_dt_disabled;
 }
 
 void

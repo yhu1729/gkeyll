@@ -671,6 +671,16 @@ struct gkyl_gyrokinetic_time_stepper_inp {
   // ExtSTS: the dominant eigenvalue of the LBO collisions is estimated as
   // dom_eig_fac times their CFL frequency (default 2.5).
   double dom_eig_fac;
+  // ExtSTS: choose the time step with ARKODE's temporal error control instead
+  // of taking the stable time step of the explicit terms (default false). The
+  // time step never exceeds that stable time step.
+  bool adaptive;
+  // ExtSTS adaptive: relative tolerance of the local error (default 1e-4).
+  double rtol;
+  // ExtSTS adaptive: absolute tolerance of each species, as a fraction of the
+  // largest magnitude of the zeroth DG coefficient (proportional to the cell
+  // average) of its distribution when the time stepping starts (default 1e-6).
+  double atol_frac;
 };
 
 // Top-level app parameters

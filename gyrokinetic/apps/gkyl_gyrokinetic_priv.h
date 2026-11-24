@@ -1463,6 +1463,9 @@ struct gk_species {
   void (*calc_integ_mom_dt_func)(
     gkyl_gyrokinetic_app *app, struct gk_species *gks, double dt, struct gkyl_array **fdot_integ_mom
   );
+  void (*scale_integ_mom_dt_func)(
+    gkyl_gyrokinetic_app *app, struct gk_species *gks, double fac, struct gkyl_array **fdot_integ_mom
+  );
 
   // Quantities used for FLR model:
   struct gkyl_array *m0_gyroavg; // Gyroaveraged particle density.
@@ -1767,6 +1770,10 @@ struct gk_field {
   // Pointer to function that stores the energies/dt at the beginning or end of a time step.
   void (*calc_energy_dt_func)(
     gkyl_gyrokinetic_app *app, const struct gk_field *field, double dt, bool is_old
+  );
+  // Pointer to function that scales the energies/dt stored at the beginning of a time step.
+  void (*scale_energy_dt_old_func)(
+    gkyl_gyrokinetic_app *app, const struct gk_field *field, double fac
   );
 
   // Objects used in IWL simulations and TS BCs.
@@ -4133,6 +4140,20 @@ void gk_species_calc_integ_mom_dt(
 );
 
 /**
+ * Scale the integrated moments divided by dt computed by
+ * gk_species_calc_integ_mom_dt, e.g. by dt/dt_actual when the time step taken
+ * (dt_actual) differs from the one they were divided by (dt).
+ *
+ * @param app gyrokinetic app object.
+ * @param gks Species object.
+ * @param fac Scaling factor.
+ * @param fdot_integ_mom Integrated moments divided by dt, scaled in place.
+ */
+void gk_species_scale_integ_mom_dt(
+  gkyl_gyrokinetic_app *app, struct gk_species *gks, double fac, struct gkyl_array **fdot_integ_mom
+);
+
+/**
  * Delete resources used in species.
  *
  * @param app gyrokinetic app object.
@@ -5179,6 +5200,19 @@ void gk_field_calc_energy(gkyl_gyrokinetic_app *app, double tm, const struct gk_
  */
 void gk_field_calc_energy_dt(
   gkyl_gyrokinetic_app *app, const struct gk_field *field, double dt, bool is_old
+);
+
+/**
+ * Scale the energies divided by dt stored by gk_field_calc_energy_dt at the
+ * beginning of a time step, e.g. by dt/dt_actual when the time step taken
+ * (dt_actual) differs from the one they were divided by (dt).
+ *
+ * @param app gyrokinetic app object.
+ * @param field Pointer to field.
+ * @param fac Scaling factor.
+ */
+void gk_field_scale_energy_dt_old(
+  gkyl_gyrokinetic_app *app, const struct gk_field *field, double fac
 );
 
 /**

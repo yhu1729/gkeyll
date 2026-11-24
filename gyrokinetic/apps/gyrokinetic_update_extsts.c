@@ -19,6 +19,7 @@ struct gk_extsts {
   void *arkode_mem; // ExtSTS (MRIStep) integrator.
   void *sts_mem; // Super time stepping (LSRKStep) integrator, owned by arkode_mem.
 
+  int num_arrays; // Number of arrays in the state vector.
   int *f_idx; // Index in the state of the distribution of each species (-1 if static).
   int *smom_idx; // Index in the state of the first stepped moment of each species.
   struct gkyl_range empty_range; // Excludes the stepped moments from norms.
@@ -27,8 +28,22 @@ struct gk_extsts {
 
   double dom_eig_fac; // Dominant eigenvalue / LBO CFL frequency.
   double dt_expl; // Stable time step of the latest explicit rhs.
-  double dt_expl_min; // Smallest stable time step of the explicit rhs in this step.
+  double dt_expl_min; // Smallest stable time step of the explicit rhs in this step attempt.
   double omega_diff; // LBO CFL frequency of the latest diffusive rhs on this rank.
+
+  bool adaptive; // Whether ARKODE's temporal error control chooses the time step.
+  double rtol; // Adaptive: relative tolerance.
+  double atol_frac; // Adaptive: absolute tolerance / largest zeroth DG coefficient of f.
+  double *atol; // Adaptive: absolute tolerance of each array of the state.
+  double dt_next; // Adaptive: time step ARKODE attempts next.
+
+  // Prepare ARKODE for a step from tcurr of at most dt0. Sets the expected time
+  // step (dt) and the output time to pass to ARKodeEvolve (tout).
+  int (*step_begin)(
+    gkyl_gyrokinetic_app *app, double tcurr, double dt0, double *dt, double *tout
+  );
+  // Finish a step of dt_actual that was expected to be dt. Returns the suggested next step.
+  double (*step_end)(gkyl_gyrokinetic_app *app, double dt, double dt_actual);
 
   long num_steps; // Number of time steps.
   long num_rhs_expl, num_rhs_diff; // Number of explicit and diffusive rhs evaluations.
@@ -182,6 +197,109 @@ extsts_dom_eig(
   return 0;
 }
 
+// Called before each step attempt (ARKODE may reject an attempt and retry).
+static int
+extsts_pre_step(sunrealtype tcurr, N_Vector y, long int step, int attempt, void *user_data)
+{
+  gkyl_gyrokinetic_app *app = user_data;
+  app->extsts->dt_expl_min = DBL_MAX;
+  return 0;
+}
+
+// Adaptive: error weights 1/(rtol*|y| + atol), with an absolute tolerance for
+// each array of the state.
+static int
+extsts_ewt(N_Vector y, N_Vector ewt, void *user_data)
+{
+  gkyl_gyrokinetic_app *app = user_data;
+  struct gk_extsts *ext = app->extsts;
+
+  N_VAbs(y, ewt);
+  N_VScale(ext->rtol, ewt, ewt);
+  for (int i = 0; i < ext->num_arrays; ++i) {
+    struct gkyl_array *ewt_arr = gkyl_nvector_array_get(ewt, i);
+    for (unsigned k = 0; k < ewt_arr->ncomp; ++k) {
+      gkyl_array_shiftc(ewt_arr, ext->atol[i], k);
+    }
+  }
+  N_VInv(ewt, ewt);
+  return 0;
+}
+
+// Adaptive: the stable time step of the explicit terms from their latest
+// evaluation (already reduced over the communicator) caps the time step.
+static int
+extsts_stable_dt(N_Vector y, sunrealtype tcurr, sunrealtype *hstab, void *user_data)
+{
+  gkyl_gyrokinetic_app *app = user_data;
+  *hstab = app->extsts->dt_expl;
+  return 0;
+}
+
+// Fixed time step: the stable time step of the explicit terms from their latest
+// evaluation, but at most dt0.
+static int
+extsts_step_begin_fixed(
+  gkyl_gyrokinetic_app *app, double tcurr, double dt0, double *dt, double *tout
+)
+{
+  struct gk_extsts *ext = app->extsts;
+  *dt = fmin(dt0, ext->dt_expl);
+  *tout = tcurr + *dt;
+  return ARKodeSetFixedStep(ext->arkode_mem, *dt);
+}
+
+static double
+extsts_step_end_fixed(gkyl_gyrokinetic_app *app, double dt, double dt_actual)
+{
+  return app->extsts->dt_expl;
+}
+
+// Adaptive time step: ARKODE chooses it, without stepping past tcurr+dt0. The
+// expected step is the one ARKODE plans to attempt, but it may reject that
+// attempt and take a smaller step.
+static int
+extsts_step_begin_adaptive(
+  gkyl_gyrokinetic_app *app, double tcurr, double dt0, double *dt, double *tout
+)
+{
+  struct gk_extsts *ext = app->extsts;
+  *dt = fmin(dt0, ext->dt_next);
+  *tout = tcurr + dt0;
+  // Only set a stop time when dt0 binds: after a step that ends at the stop
+  // time, ARKODE reports the step just taken as the next one (not the one its
+  // controller chose), and feeding that back as dt0 would keep the step from growing.
+  if (dt0 < ext->dt_next) {
+    return ARKodeSetStopTime(ext->arkode_mem, *tout);
+  }
+  return ARKodeClearStopTime(ext->arkode_mem);
+}
+
+static double
+extsts_step_end_adaptive(gkyl_gyrokinetic_app *app, double dt, double dt_actual)
+{
+  struct gk_extsts *ext = app->extsts;
+
+  // The time-rate diagnostics stored at the beginning of the step were divided
+  // by the expected time step: rescale them if the step taken differs.
+  if (dt_actual != dt) {
+    for (int i = 0; i < app->num_species; ++i) {
+      struct gk_species *gks = &app->species[i];
+      gk_species_scale_integ_mom_dt(app, gks, dt / dt_actual, gks->fdot_mom_old);
+    }
+    gk_field_scale_energy_dt_old(app, app->field, dt / dt_actual);
+  }
+
+  sunrealtype dt_next = 0.0;
+  int status = ARKodeGetCurrentStep(ext->arkode_mem, &dt_next);
+  if (status != ARK_SUCCESS || !(dt_next > 0.0)) {
+    // Not expected after a successful step; fall back to the step just taken.
+    dt_next = dt_actual;
+  }
+  ext->dt_next = dt_next;
+  return dt_next;
+}
+
 static void
 extsts_check(const gkyl_gyrokinetic_app *app, int status, const char *call)
 {
@@ -191,17 +309,59 @@ extsts_check(const gkyl_gyrokinetic_app *app, int status, const char *call)
   }
 }
 
+// Adaptive: the absolute tolerance of the distribution of each evolving species
+// is atol_frac times the largest magnitude of its zeroth DG coefficient
+// (proportional to the cell average) over all MPI ranks.
+static void
+extsts_set_atol(gkyl_gyrokinetic_app *app)
+{
+  struct gk_extsts *ext = app->extsts;
+
+  for (int i = 0; i < app->num_species; ++i) {
+    if (ext->f_idx[i] < 0) {
+      continue;
+    }
+    struct gk_species *gks = &app->species[i];
+
+    double *f_abs_max = gkyl_calloc_hodev(app->use_gpu, gks->f->ncomp, sizeof(double));
+    gkyl_array_reduce_range(f_abs_max, gks->f, GKYL_ABS_MAX, &gks->local);
+    double f0_abs_max_local[1];
+    if (app->use_gpu) {
+      gkyl_cu_memcpy(f0_abs_max_local, f_abs_max, sizeof(double), GKYL_CU_MEMCPY_D2H);
+    } else {
+      f0_abs_max_local[0] = f_abs_max[0];
+    }
+    gkyl_free_hodev(app->use_gpu, f_abs_max);
+
+    double f0_abs_max = f0_abs_max_local[0];
+    gkyl_comm_allreduce_host(
+      app->comm, GKYL_DOUBLE, GKYL_MAX, 1, f0_abs_max_local, &f0_abs_max
+    );
+    if (!(f0_abs_max > 0.0)) {
+      gkyl_exit("ExtSTS: cannot set the absolute tolerance of a species whose f is zero.");
+    }
+    ext->atol[ext->f_idx[i]] = ext->atol_frac * f0_abs_max;
+  }
+}
+
 static struct gkyl_update_status
 gyrokinetic_update_extsts(gkyl_gyrokinetic_app *app, double dt0)
 {
-  // Take a time step with the ExtSTS method. The time step is the stable time
-  // step of the explicit terms, obtained from their latest evaluation.
+  // Take a time step with the ExtSTS method. The time step is at most dt0, and
+  // either the stable time step of the explicit terms (from their latest
+  // evaluation) or the one chosen by ARKODE's error control.
   struct gk_extsts *ext = app->extsts;
   struct gkyl_gyrokinetic_fdot_args *args = &app->fdot_args;
   struct gkyl_update_status st = {.success = true};
 
   double tcurr = app->tcurr;
-  double dt = fmin(dt0, ext->dt_expl);
+  double dt = dt0, tout = tcurr + dt0;
+  int status = ext->step_begin(app, tcurr, dt0, &dt, &tout);
+  if (status < 0) {
+    gkyl_gyrokinetic_app_cout(app, stderr, "ExtSTS: step setup failed with status %d.\n", status);
+    st.success = false;
+    return st;
+  }
 
   for (int i = 0; i < app->num_species; ++i) {
     struct gk_species *gks = &app->species[i];
@@ -223,12 +383,8 @@ gyrokinetic_update_extsts(gkyl_gyrokinetic_app *app, double dt0)
   // Store the field energies divided by dt for the energy rate and balance diagnostics.
   gk_field_calc_energy_dt(app, app->field, dt, true);
 
-  ext->dt_expl_min = DBL_MAX;
   double tnew = tcurr;
-  int status = ARKodeSetFixedStep(ext->arkode_mem, dt);
-  if (status == ARK_SUCCESS) {
-    status = ARKodeEvolve(ext->arkode_mem, tcurr + dt, ext->state, &tnew, ARK_ONE_STEP);
-  }
+  status = ARKodeEvolve(ext->arkode_mem, tout, ext->state, &tnew, ARK_ONE_STEP);
   if (status < 0) {
     gkyl_gyrokinetic_app_cout(app, stderr, "ExtSTS: time step failed with status %d.\n", status);
     st.success = false;
@@ -267,7 +423,7 @@ gyrokinetic_update_extsts(gkyl_gyrokinetic_app *app, double dt0)
   ext->num_steps += 1;
 
   st.dt_actual = dt_actual;
-  st.dt_suggested = ext->dt_expl;
+  st.dt_suggested = ext->step_end(app, dt, dt_actual);
   return st;
 }
 
@@ -312,6 +468,14 @@ gyrokinetic_update_extsts_first(gkyl_gyrokinetic_app *app, double dt0)
   extsts_rhs_explicit(app->tcurr, ext->state, rhs, app);
   gkyl_nvector_array_release(rhs);
 
+  if (ext->adaptive) {
+    // The tolerances are set from the initial (or restart) state, and the
+    // first attempted step is the stable time step of the explicit terms.
+    extsts_set_atol(app);
+    ext->dt_next = fmin(dt0, ext->dt_expl);
+    extsts_check(app, ARKodeSetInitStep(ext->arkode_mem, ext->dt_next), "ARKodeSetInitStep");
+  }
+
   app->update_func = gyrokinetic_update_extsts;
   return gyrokinetic_update_extsts(app, dt0);
 }
@@ -337,11 +501,22 @@ gyrokinetic_extsts_init(
     }
   }
 
+  const struct gkyl_gyrokinetic_time_stepper_inp *ts_inp = &gk->time_stepper;
+  if (ts_inp->dom_eig_fac < 0.0 || ts_inp->rtol < 0.0 || ts_inp->atol_frac < 0.0) {
+    gkyl_exit("ExtSTS: dom_eig_fac, rtol and atol_frac cannot be negative.");
+  }
+
   struct gk_extsts *ext = gkyl_malloc(sizeof(*ext));
   *ext = (struct gk_extsts){
-    .dom_eig_fac = gk->time_stepper.dom_eig_fac == 0.0 ? 2.5 : gk->time_stepper.dom_eig_fac,
+    .dom_eig_fac = ts_inp->dom_eig_fac == 0.0 ? 2.5 : ts_inp->dom_eig_fac,
     .dt_expl = DBL_MAX,
     .dt_expl_min = DBL_MAX,
+    .adaptive = ts_inp->adaptive,
+    .rtol = ts_inp->rtol == 0.0 ? 1.0e-4 : ts_inp->rtol,
+    .atol_frac = ts_inp->atol_frac == 0.0 ? 1.0e-6 : ts_inp->atol_frac,
+    .dt_next = DBL_MAX,
+    .step_begin = ts_inp->adaptive ? extsts_step_begin_adaptive : extsts_step_begin_fixed,
+    .step_end = ts_inp->adaptive ? extsts_step_end_adaptive : extsts_step_end_fixed,
   };
   app->extsts = ext;
 
@@ -383,6 +558,14 @@ gyrokinetic_extsts_init(
     }
   }
 
+  // Absolute tolerances: those of the distributions are set in the first step,
+  // and those of the stepped moments are irrelevant (they are not in the norms).
+  ext->num_arrays = num_arrays;
+  ext->atol = gkyl_malloc(num_arrays * sizeof(double));
+  for (int k = 0; k < num_arrays; ++k) {
+    ext->atol[k] = 1.0;
+  }
+
   // The vector reduces through the app communicator, so SUNDIALS needs none.
   if (SUNContext_Create(SUN_COMM_NULL, &ext->sunctx) != SUN_SUCCESS) {
     gkyl_exit("ExtSTS: could not create the SUNDIALS context.");
@@ -420,6 +603,16 @@ gyrokinetic_extsts_init(
   extsts_check(app, LSRKStepSetDomEigFn(ext->sts_mem, extsts_dom_eig), "LSRKStepSetDomEigFn");
   extsts_check(app, LSRKStepSetDomEigFrequency(ext->sts_mem, 1), "LSRKStepSetDomEigFrequency");
 
+  extsts_check(app, ARKodeSetPreStepFn(ext->arkode_mem, extsts_pre_step), "ARKodeSetPreStepFn");
+  if (ext->adaptive) {
+    extsts_check(app, ARKodeWFtolerances(ext->arkode_mem, extsts_ewt), "ARKodeWFtolerances");
+    extsts_check(
+      app, ARKodeSetStabilityFn(ext->arkode_mem, extsts_stable_dt, app), "ARKodeSetStabilityFn"
+    );
+    // The stable time step already includes the CFL fraction of the app.
+    extsts_check(app, ARKodeSetCFLFraction(ext->arkode_mem, 1.0), "ARKodeSetCFLFraction");
+  }
+
   app->update_func = gyrokinetic_update_extsts_first;
 }
 
@@ -444,6 +637,19 @@ gyrokinetic_extsts_release(gkyl_gyrokinetic_app *app)
     "%.4g MB at the peak.\n",
     mem.num_peak, mem.num_live, mem.num_unwritten, mem.vec_bytes / 1.0e6, mem.bytes_peak / 1.0e6
   );
+  if (ext->adaptive) {
+    long num_attempts = 0, num_err_fails = 0, num_exp_limited = 0, num_acc_limited = 0;
+    ARKodeGetNumStepAttempts(ext->arkode_mem, &num_attempts);
+    ARKodeGetNumErrTestFails(ext->arkode_mem, &num_err_fails);
+    ARKodeGetNumExpSteps(ext->arkode_mem, &num_exp_limited);
+    ARKodeGetNumAccSteps(ext->arkode_mem, &num_acc_limited);
+    gkyl_gyrokinetic_app_cout(
+      app, stdout,
+      "ExtSTS: %ld step attempts, %ld error test failures; next step limited by the explicit "
+      "stability %ld times, by the accuracy %ld times.\n",
+      num_attempts, num_err_fails, num_exp_limited, num_acc_limited
+    );
+  }
 
   ARKodeFree(&ext->arkode_mem);
   gkyl_nvector_array_release(ext->state);
@@ -453,6 +659,7 @@ gyrokinetic_extsts_release(gkyl_gyrokinetic_app *app)
     gkyl_free(ext->smom_rate[i]);
   }
   gkyl_free(ext->smom_rate);
+  gkyl_free(ext->atol);
   gkyl_free(ext->f_state);
   gkyl_free(ext->smom_idx);
   gkyl_free(ext->f_idx);

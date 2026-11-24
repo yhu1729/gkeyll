@@ -6,8 +6,9 @@ Steps:
      tests and the regression executables. `make <regression target>` alone does
      not rebuild the libraries after a source change, hence `make gyrokinetic` first.
   2. Run the unit tests ctest_nvector_array and ctest_array_reduce.
-  3. Run rt_gk_sheath_extsts_1x2v_p1 (ExtSTS) and rt_gk_sheath_1x2v_p1 (the same
-     problem with SSP-RK3), each in its own directory.
+  3. Run rt_gk_sheath_extsts_1x2v_p1 (ExtSTS), rt_gk_sheath_extsts_adapt_1x2v_p1
+     (ExtSTS with an adaptive time step) and rt_gk_sheath_1x2v_p1 (the same problem
+     with SSP-RK3), each in its own directory.
   4. Compare the .gkyl output:
      - ExtSTS against SSP-RK3. This is a sanity bound that catches gross errors
        (a missing or doubled term), not a convergence test: the two methods have
@@ -15,8 +16,11 @@ Steps:
        last step is not clipped to t_end. The report includes the difference that
        the end-time offset alone would cause, estimated from the average rate of
        change of the SSP-RK3 solution.
+     - Adaptive ExtSTS against fixed-step ExtSTS: also a sanity bound, since the
+       time steps differ.
      - ExtSTS against an earlier ExtSTS run (--ref), to detect any change in results.
-     - ExtSTS on N MPI ranks against the serial ExtSTS run (--mpi N).
+     - ExtSTS (fixed and adaptive time step) on N MPI ranks against the serial
+       runs (--mpi N).
   5. Optionally (--valgrind), run the unit tests and a short ExtSTS run under Valgrind.
 
 Every invocation writes to a new directory <run-dir>/<date>-<time>-<commit>, which
@@ -49,6 +53,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 UNIT_TESTS = ["ctest_nvector_array", "ctest_array_reduce"]
 EXTSTS_RT = "rt_gk_sheath_extsts_1x2v_p1"
+ADAPT_RT = "rt_gk_sheath_extsts_adapt_1x2v_p1"
 BASELINE_RT = "rt_gk_sheath_1x2v_p1"
 VALGRIND_STEPS = 20
 
@@ -364,6 +369,21 @@ def check_extsts_log(report, name, log_path):
     return report.check(True, name, detail)
 
 
+def check_adaptive_log(report, name, log_path):
+    """Check the ExtSTS stepper chose the time step adaptively (from its summary)."""
+    text = Path(log_path).read_text(errors="replace")
+    adapt = re.search(
+        r"^ExtSTS: (\d+) step attempts, (\d+) error test failures.*$", text, re.M
+    )
+    if not adapt:
+        return report.check(
+            False,
+            name,
+            "no adaptive ExtSTS summary in the log: was adaptivity enabled?",
+        )
+    return report.check(True, name, adapt.group(0).removeprefix("ExtSTS: "))
+
+
 def run_regression(
     report,
     out_dir,
@@ -448,6 +468,13 @@ def main():
         help="max rel. difference between ExtSTS and SSP-RK3 (default: %(default)s)",
     )
     parser.add_argument(
+        "--adapt-tol",
+        type=float,
+        default=5e-3,
+        help="max rel. difference between adaptive and fixed-step ExtSTS "
+        "(default: %(default)s)",
+    )
+    parser.add_argument(
         "--ref-tol",
         type=float,
         default=1e-12,
@@ -497,7 +524,8 @@ def main():
     if not args.skip_build:
         targets = [f"{build_dir}/core/unit/{t}" for t in UNIT_TESTS]
         targets += [
-            f"{build_dir}/gyrokinetic/creg/{t}" for t in (EXTSTS_RT, BASELINE_RT)
+            f"{build_dir}/gyrokinetic/creg/{t}"
+            for t in (EXTSTS_RT, ADAPT_RT, BASELINE_RT)
         ]
         log = out_dir / "build.log"
         status = run_logged(["make", f"-j{args.nproc}", "gyrokinetic"], log, REPO)
@@ -524,11 +552,19 @@ def main():
     extsts_dir = run_regression(
         report, out_dir, build_dir, EXTSTS_RT, "extsts", gpu_args
     )
+    adapt_dir = run_regression(
+        report, out_dir, build_dir, ADAPT_RT, "extsts_adapt", gpu_args
+    )
     baseline_dir = run_regression(
         report, out_dir, build_dir, BASELINE_RT, "ssprk3", gpu_args
     )
     if extsts_dir:
         check_extsts_log(report, "ExtSTS stepper used", extsts_dir / "run.log")
+    if adapt_dir:
+        check_extsts_log(
+            report, "ExtSTS stepper used (adaptive)", adapt_dir / "run.log"
+        )
+        check_adaptive_log(report, "ExtSTS adaptive time step", adapt_dir / "run.log")
 
     # 4. Comparisons.
     if extsts_dir and baseline_dir:
@@ -540,6 +576,18 @@ def main():
             baseline_dir,
             BASELINE_RT,
             args.baseline_tol,
+            args.verbose,
+            offset_estimate=True,
+        )
+    if adapt_dir and extsts_dir:
+        compare_runs(
+            report,
+            "adaptive vs fixed-step ExtSTS",
+            adapt_dir,
+            ADAPT_RT,
+            extsts_dir,
+            EXTSTS_RT,
+            args.adapt_tol,
             args.verbose,
             offset_estimate=True,
         )
@@ -557,30 +605,36 @@ def main():
     if args.mpi:
         mpi_args = [*gpu_args, "-M", "-c", str(args.mpi)]
         launcher = [*args.mpiexec.split(), "-np", str(args.mpi)]
-        mpi_dir = run_regression(
-            report,
-            out_dir,
-            build_dir,
-            EXTSTS_RT,
-            f"extsts_mpi{args.mpi}",
-            mpi_args,
-            launcher,
-        )
-        if mpi_dir:
-            check_extsts_log(
-                report, f"ExtSTS stepper used (MPI {args.mpi})", mpi_dir / "run.log"
+        for rt, label, serial_dir in (
+            (EXTSTS_RT, "extsts", extsts_dir),
+            (ADAPT_RT, "extsts_adapt", adapt_dir),
+        ):
+            mpi_dir = run_regression(
+                report,
+                out_dir,
+                build_dir,
+                rt,
+                f"{label}_mpi{args.mpi}",
+                mpi_args,
+                launcher,
             )
-            if extsts_dir:
-                compare_runs(
+            if mpi_dir:
+                check_extsts_log(
                     report,
-                    f"ExtSTS MPI {args.mpi} vs serial",
-                    mpi_dir,
-                    EXTSTS_RT,
-                    extsts_dir,
-                    EXTSTS_RT,
-                    args.mpi_tol,
-                    args.verbose,
+                    f"{label} stepper used (MPI {args.mpi})",
+                    mpi_dir / "run.log",
                 )
+                if serial_dir:
+                    compare_runs(
+                        report,
+                        f"{label} MPI {args.mpi} vs serial",
+                        mpi_dir,
+                        rt,
+                        serial_dir,
+                        rt,
+                        args.mpi_tol,
+                        args.verbose,
+                    )
 
     # 5. Memory checks.
     if args.valgrind:
