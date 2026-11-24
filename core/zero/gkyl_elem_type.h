@@ -18,7 +18,8 @@ enum gkyl_array_op {
   GKYL_AXPBY,
   GKYL_ABS_MAX,
   GKYL_SQ_SUM,
-  GKYL_CELL_MEAN_SQ_SUM
+  GKYL_CELL_MEAN_SQ_SUM,
+  GKYL_PROD_SQ_SUM
 };
 
 // file types for raw IO of Gkeyll data

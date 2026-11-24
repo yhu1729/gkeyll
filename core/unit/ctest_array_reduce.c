@@ -328,6 +328,71 @@ test_array_reduce_extended_ho(void)
   array_reduce_extended_test(false);
 }
 
+/**
+ * Check the weighted reduction sum((w*x)^2), on all cells and on a subrange.
+ *
+ * @param use_gpu Whether to run on the GPU.
+ */
+static void
+array_reduce_weighted_prod_sq_sum_test(bool use_gpu)
+{
+  struct gkyl_array *arr_ho = gkyl_array_new(GKYL_DOUBLE, 3, 3);
+  struct gkyl_array *wgt_ho = gkyl_array_new(GKYL_DOUBLE, 3, 3);
+
+  const double values[] = {1, -2, 3, -4, 5, -6, 7, 8, 9};
+  const double weights[] = {2, -3, 0.5, -1, 4, 2, 1, 0.5, -1};
+  memcpy(arr_ho->data, values, sizeof(values));
+  memcpy(wgt_ho->data, weights, sizeof(weights));
+
+  // Hand-calculated: e.g. component 0 is (2*1)^2 + (-1*-4)^2 + (1*7)^2 = 69.
+  const double expected_all[3] = {69, 452, 227.25};
+  const double expected_sub[3] = {20, 436, 146.25}; // First two cells only.
+
+  struct gkyl_range full, sub;
+  gkyl_range_init(&full, 1, (int[]){1}, (int[]){3});
+  gkyl_sub_range_init(&sub, &full, (int[]){1}, (int[]){2});
+
+  struct gkyl_array *arr = mkarr(use_gpu, 3, 3);
+  struct gkyl_array *wgt = mkarr(use_gpu, 3, 3);
+  gkyl_array_copy(arr, arr_ho);
+  gkyl_array_copy(wgt, wgt_ho);
+
+  double result_ho[3];
+  double *result = use_gpu ? gkyl_cu_malloc(sizeof(result_ho)) : result_ho;
+
+  for (int region = 0; region < 3; ++region) {
+    const double *expected = region == 2 ? expected_sub : expected_all;
+    if (region == 0) {
+      gkyl_array_reduce_weighted(result, arr, wgt, GKYL_PROD_SQ_SUM);
+    } else {
+      gkyl_array_reduce_weighted_range(
+        result, arr, wgt, GKYL_PROD_SQ_SUM, region == 2 ? &sub : &full
+      );
+    }
+    if (use_gpu) {
+      gkyl_cu_memcpy(result_ho, result, sizeof(result_ho), GKYL_CU_MEMCPY_D2H);
+    }
+    for (int comp = 0; comp < 3; ++comp) {
+      TEST_CHECK(fabs(result_ho[comp] - expected[comp]) <= 2e-12 * fabs(expected[comp]));
+      TEST_MSG("region=%d comp=%d: %.17g != %.17g", region, comp, result_ho[comp], expected[comp]);
+    }
+  }
+
+  if (use_gpu) {
+    gkyl_cu_free(result);
+  }
+  gkyl_array_release(arr);
+  gkyl_array_release(wgt);
+  gkyl_array_release(arr_ho);
+  gkyl_array_release(wgt_ho);
+}
+
+static void
+test_array_reduce_weighted_prod_sq_sum_ho(void)
+{
+  array_reduce_weighted_prod_sq_sum_test(false);
+}
+
 // Fast-math permits reassociation, so evaluation-order checks require a strict build.
 #ifndef __FAST_MATH__
 /**
@@ -666,6 +731,12 @@ test_array_reduce_extended_dev(void)
 {
   array_reduce_extended_test(true);
 }
+
+static void
+test_array_reduce_weighted_prod_sq_sum_dev(void)
+{
+  array_reduce_weighted_prod_sq_sum_test(true);
+}
 #ifndef __FAST_MATH__
 /**
  * Run the extreme weighted squared-sum checks on the GPU in strict builds.
@@ -684,6 +755,7 @@ TEST_LIST = {
   {"array_reduce_range_ho", test_reduce_range_ho},
   {"array_reduce_sum_range_ho", test_sum_reduce_range_ho},
   {"array_reduce_extended_ho", test_array_reduce_extended_ho},
+  {"array_reduce_weighted_prod_sq_sum_ho", test_array_reduce_weighted_prod_sq_sum_ho},
 #ifndef __FAST_MATH__
   {"array_reduce_weighted_sq_sum_extreme_ho", test_array_reduce_weighted_sq_sum_extreme_ho},
 #endif
@@ -697,6 +769,7 @@ TEST_LIST = {
   {"array_reduce_range_max_timer_32x32x32x32_dev", test_array_reduce_range_max_timer_32x32x32x32_dev
   },
   {"array_reduce_extended_dev", test_array_reduce_extended_dev},
+  {"array_reduce_weighted_prod_sq_sum_dev", test_array_reduce_weighted_prod_sq_sum_dev},
 #ifndef __FAST_MATH__
   {"array_reduce_weighted_sq_sum_extreme_dev", test_array_reduce_weighted_sq_sum_extreme_dev},
 #endif

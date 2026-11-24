@@ -657,6 +657,22 @@ struct gkyl_gyrokinetic_metadata_inp {
   int num_attributes; // Number of attributes.
 };
 
+// Time-stepping scheme.
+enum gkyl_gyrokinetic_time_stepper_id {
+  GKYL_GK_TIME_STEPPER_SSP_RK3 = 0, // SSP-RK3 (default).
+  // SUNDIALS (ARKODE) extended super time stepping: the LBO collisions are
+  // super time stepped, and every other term is advanced explicitly.
+  GKYL_GK_TIME_STEPPER_EXTSTS,
+};
+
+// Time stepper inputs.
+struct gkyl_gyrokinetic_time_stepper_inp {
+  enum gkyl_gyrokinetic_time_stepper_id id; // Time-stepping scheme.
+  // ExtSTS: the dominant eigenvalue of the LBO collisions is estimated as
+  // dom_eig_fac times their CFL frequency (default 2.5).
+  double dom_eig_fac;
+};
+
 // Top-level app parameters
 struct gkyl_gk {
   char name[128]; // Name of app: used as output prefix. Should not end in _b#.
@@ -671,6 +687,8 @@ struct gkyl_gk {
 
   double cfl_frac; // CFL fraction to use (default 1.0).
   double cfl_frac_omegaH; // CFL fraction used for the omega_H dt (default 1.0).
+
+  struct gkyl_gyrokinetic_time_stepper_inp time_stepper; // Time stepper inputs.
 
   // App level diagnostics.
   struct gkyl_phase_diagnostics_inp diagnostics;

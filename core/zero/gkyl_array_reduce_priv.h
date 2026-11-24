@@ -171,6 +171,17 @@ void gkyl_array_reduce_weighted_cell_mean_sq_sum_cu(
  * @param out_d Device-accessible output of inp->ncomp doubles, not aliasing inputs.
  * @param inp Input device array.
  * @param wgt Weight device array with matching shape.
+ */
+void gkyl_array_reduce_weighted_prod_sq_sum_cu(
+  double *out_d, const struct gkyl_array *inp, const struct gkyl_array *wgt
+);
+
+/**
+ * Reduce device data componentwise, with CPU-wrapper validation already performed.
+ *
+ * @param out_d Device-accessible output of inp->ncomp doubles, not aliasing inputs.
+ * @param inp Input device array.
+ * @param wgt Weight device array with matching shape.
  * @param range Selection with the input arrays' parent indexing.
  */
 void gkyl_array_reduce_weighted_range_min_cu(
@@ -239,6 +250,19 @@ void gkyl_array_reduce_weighted_range_sq_sum_cu(
  * @param range Selection with the input arrays' parent indexing.
  */
 void gkyl_array_reduce_weighted_range_cell_mean_sq_sum_cu(
+  double *out_d, const struct gkyl_array *inp, const struct gkyl_array *wgt,
+  const struct gkyl_range *range
+);
+
+/**
+ * Reduce device data componentwise, with CPU-wrapper validation already performed.
+ *
+ * @param out_d Device-accessible output of inp->ncomp doubles, not aliasing inputs.
+ * @param inp Input device array.
+ * @param wgt Weight device array with matching shape.
+ * @param range Selection with the input arrays' parent indexing.
+ */
+void gkyl_array_reduce_weighted_range_prod_sq_sum_cu(
   double *out_d, const struct gkyl_array *inp, const struct gkyl_array *wgt,
   const struct gkyl_range *range
 );

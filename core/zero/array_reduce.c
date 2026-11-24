@@ -244,6 +244,9 @@ gkyl_array_reduce_weighted(
       case GKYL_CELL_MEAN_SQ_SUM:
         gkyl_array_reduce_weighted_cell_mean_sq_sum_cu(out, arr, wgt);
         break;
+      case GKYL_PROD_SQ_SUM:
+        gkyl_array_reduce_weighted_prod_sq_sum_cu(out, arr, wgt);
+        break;
       default:
         assert(false);
         break;
@@ -337,6 +340,20 @@ gkyl_array_reduce_weighted(
         }
       }
       break;
+
+    case GKYL_PROD_SQ_SUM:
+      for (long k = 0; k < nc; ++k) {
+        out[k] = 0;
+      }
+      for (size_t i = 0; i < arr->size; ++i) {
+        const double *arr_c = gkyl_array_cfetch(arr, i);
+        const double *wgt_c = gkyl_array_cfetch(wgt, i);
+        for (long k = 0; k < nc; ++k) {
+          double prod = wgt_c[k] * arr_c[k];
+          out[k] += prod * prod;
+        }
+      }
+      break;
     default:
       assert(false);
       break;
@@ -375,6 +392,9 @@ gkyl_array_reduce_weighted_range(
         break;
       case GKYL_CELL_MEAN_SQ_SUM:
         gkyl_array_reduce_weighted_range_cell_mean_sq_sum_cu(res, arr, wgt, range);
+        break;
+      case GKYL_PROD_SQ_SUM:
+        gkyl_array_reduce_weighted_range_prod_sq_sum_cu(res, arr, wgt, range);
         break;
       default:
         assert(false);
@@ -476,6 +496,21 @@ gkyl_array_reduce_weighted_range(
         mean_sq /= n;
         for (long i = 0; i < n; ++i) {
           res[i] += wgt_c[i] * mean_sq;
+        }
+      }
+      break;
+    case GKYL_PROD_SQ_SUM:
+      for (long i = 0; i < n; ++i) {
+        res[i] = 0;
+      }
+
+      while (gkyl_range_iter_next(&iter)) {
+        long start = gkyl_range_idx(range, iter.idx);
+        const double *arr_c = gkyl_array_cfetch(arr, start);
+        const double *wgt_c = gkyl_array_cfetch(wgt, start);
+        for (long i = 0; i < n; ++i) {
+          double prod = wgt_c[i] * arr_c[i];
+          res[i] += prod * prod;
         }
       }
       break;

@@ -41,12 +41,43 @@ gk_species_kinetic_omegaH_dt(
   }
 }
 
-static double
-gk_species_kinetic_rhs_dynamic(
-  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
-  struct gkyl_array *rhs, struct gkyl_array **step_moms_out
+// Method that adds the LBO collision operator to the rhs.
+typedef void (*gk_species_kinetic_lbo_rhs_t)(
+  gkyl_gyrokinetic_app *app, const struct gk_species *gks, struct gk_lbo_collisions *lbo,
+  const struct gkyl_array *fin, struct gkyl_array *rhs
+);
+
+static void
+gk_species_kinetic_lbo_rhs_skip(
+  gkyl_gyrokinetic_app *app, const struct gk_species *gks, struct gk_lbo_collisions *lbo,
+  const struct gkyl_array *fin, struct gkyl_array *rhs
 )
 {
+  // Empty method: the LBO operator is advanced separately.
+}
+
+static double
+gk_species_kinetic_omega_cfl(gkyl_gyrokinetic_app *app, struct gk_species *species)
+{
+  gkyl_array_reduce_range(species->omega_cfl, species->cflrate, GKYL_MAX, &species->local);
+
+  double omega_cfl_ho[1];
+  if (app->use_gpu) {
+    gkyl_cu_memcpy(omega_cfl_ho, species->omega_cfl, sizeof(double), GKYL_CU_MEMCPY_D2H);
+  } else {
+    omega_cfl_ho[0] = species->omega_cfl[0];
+  }
+  return omega_cfl_ho[0];
+}
+
+static inline double
+gk_species_kinetic_rhs_terms(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs, struct gkyl_array **step_moms_out, gk_species_kinetic_lbo_rhs_t lbo_rhs
+)
+{
+  // Compute df/dt and the stable time step, adding the LBO collisions with lbo_rhs.
+
   // Gyroaverage the potential if needed.
   species->gyroaverage(app, species, app->field->phi_smooth, species->gyro_phi);
 
@@ -63,7 +94,7 @@ gk_species_kinetic_rhs_dynamic(
   );
 
   // LBO Collisions.
-  gk_species_lbo_rhs(app, species, &species->lbo, fin, rhs);
+  lbo_rhs(app, species, &species->lbo, fin, rhs);
 
   // BGK collisions.
   gk_species_bgk_rhs(app, species, &species->bgk, fin, rhs);
@@ -97,16 +128,7 @@ gk_species_kinetic_rhs_dynamic(
   // Reduce the CFL frequency and compute stable dt needed by this species.
   app->stat.n_species_omega_cfl += 1;
   struct timespec tm = gkyl_wall_clock();
-  gkyl_array_reduce_range(species->omega_cfl, species->cflrate, GKYL_MAX, &species->local);
-
-  double omega_cfl_ho[1];
-  if (app->use_gpu) {
-    gkyl_cu_memcpy(omega_cfl_ho, species->omega_cfl, sizeof(double), GKYL_CU_MEMCPY_D2H);
-  } else {
-    omega_cfl_ho[0] = species->omega_cfl[0];
-  }
-
-  double dt_out = app->cfl / omega_cfl_ho[0];
+  double dt_out = app->cfl / gk_species_kinetic_omega_cfl(app, species);
 
   // Apply omega_H constraint on dt.
   species->dt_omegaH = gk_species_kinetic_omegaH_dt(app, species, fin);
@@ -116,6 +138,50 @@ gk_species_kinetic_rhs_dynamic(
 
   app->stat.species_omega_cfl_tm += gkyl_time_diff_now_sec(tm);
   return dt_out;
+}
+
+static double
+gk_species_kinetic_rhs_dynamic(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs, struct gkyl_array **step_moms_out
+)
+{
+  return gk_species_kinetic_rhs_terms(app, species, fin, rhs, step_moms_out, gk_species_lbo_rhs);
+}
+
+static double
+gk_species_kinetic_rhs_explicit_dynamic(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs, struct gkyl_array **step_moms_out
+)
+{
+  // Every term except the LBO collisions.
+  return gk_species_kinetic_rhs_terms(
+    app, species, fin, rhs, step_moms_out, gk_species_kinetic_lbo_rhs_skip
+  );
+}
+
+static double
+gk_species_kinetic_rhs_diffusive_dynamic(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs
+)
+{
+  // Only the LBO collisions. Returns their CFL frequency (not a time step).
+  gkyl_array_clear(species->cflrate, 0.0);
+  gkyl_array_clear(rhs, 0.0);
+
+  gk_species_lbo_rhs(app, species, &species->lbo, fin, rhs);
+
+  gk_species_fdot_multiplier_advance_times_cfl(
+    app, species, &species->fdot_mult, app->field->phi_smooth, fin, species->cflrate
+  );
+
+  app->stat.n_species_omega_cfl += 1;
+  struct timespec tm = gkyl_wall_clock();
+  double omega_cfl = gk_species_kinetic_omega_cfl(app, species);
+  app->stat.species_omega_cfl_tm += gkyl_time_diff_now_sec(tm);
+  return omega_cfl;
 }
 
 static double
@@ -660,6 +726,8 @@ gk_species_kinetic_init_dynamic(
 
   // Set function pointers.
   gks->rhs_func = gk_species_kinetic_rhs_dynamic;
+  gks->rhs_explicit_func = gk_species_kinetic_rhs_explicit_dynamic;
+  gks->rhs_diffusive_func = gk_species_kinetic_rhs_diffusive_dynamic;
   gks->rhs_implicit_func = gk_species_kinetic_rhs_implicit_dynamic;
   gks->bc_func = gk_species_kinetic_apply_bc_dynamic;
   gks->release_func = gk_species_kinetic_release_dynamic;

@@ -23,6 +23,7 @@ ARCH_FLAGS=-march=native
 CUDA_ARCH=70
 
 USE_CUDSS=
+USE_SUNDIALS=
 USE_LUA=
 USE_MPI=
 USE_NCCL=
@@ -66,6 +67,7 @@ CUDA_ARCH                  CUDA architecture flag to specify compute capability.
 --use-mpi                  [no] Build MPI-dependent code
 --use-nccl                 [no] Build NCCL-dependent code
 --use-cudss                [no] Build CUDSS-dependent code
+--use-sundials             [no] Build SUNDIALS-dependent code (needs SUNDIALS >= 7.9.0)
 --use-lua                  [no] Build Lua dependent code
 --use-lapack-lite          [no] Build LAPACK-lite (lower efficiency that OpenBLAS)
                            Cannot be combined with --lapack-* options or
@@ -98,6 +100,9 @@ Library Includes and Locations
 
 --cudss-inc                Location of cuDSS headers.
 --cudss-lib                Location to cuDSS library.
+
+--sundials-inc             Location of SUNDIALS headers.
+--sundials-lib             Location to SUNDIALS libraries.
 
 --lua-inc                  Location of Lua headers.
 --lua-lib                  Location to Lua library.
@@ -239,6 +244,18 @@ do
       [ -n "$value" ] || die "Missing value in flag $key."
       CONF_CUDSS_LIB_DIR="$value"
       ;;
+   --use-sundials)
+      [ -n "$value" ] || die "Missing value in flag $key."
+      USE_SUNDIALS="$value"
+      ;;
+   --sundials-inc)
+      [ -n "$value" ] || die "Missing value in flag $key."
+      CONF_SUNDIALS_INC_DIR="$value"
+      ;;
+   --sundials-lib)
+      [ -n "$value" ] || die "Missing value in flag $key."
+      CONF_SUNDIALS_LIB_DIR="$value"
+      ;;
    --use-lua)
       [ -n "$value" ] || die "Missing value in flag $key."
       USE_LUA="$value"
@@ -285,6 +302,13 @@ then
     USE_CUDSS=1
 else
     USE_CUDSS=
+fi
+
+if [ "$USE_SUNDIALS" = "yes" ]
+then
+    USE_SUNDIALS=1
+else
+    USE_SUNDIALS=
 fi
 
 if [ "$USE_LUA" = "yes" ]
@@ -387,6 +411,10 @@ fi
 : "${CONF_CUDSS_INC_DIR=$PREFIX/cuDSS/include/}"
 : "${CONF_CUDSS_LIB_DIR=$PREFIX/cuDSS/lib/}"
 
+# SUNDIALS specific paths and flags
+: "${CONF_SUNDIALS_INC_DIR=$PREFIX/sundials/include/}"
+: "${CONF_SUNDIALS_LIB_DIR=$PREFIX/sundials/lib/}"
+
 # SuperLU includes and librararies
 : "${SUPERLU_INC_DIR=$PREFIX/superlu/include/}"
 if [ "$OSTYPE" = "linux-gnu"* ]
@@ -435,6 +463,10 @@ CONF_NCCL_LIB_DIR=$CONF_NCCL_LIB_DIR
 USE_CUDSS=$USE_CUDSS
 CONF_CUDSS_INC_DIR=$CONF_CUDSS_INC_DIR
 CONF_CUDSS_LIB_DIR=$CONF_CUDSS_LIB_DIR
+
+USE_SUNDIALS=$USE_SUNDIALS
+CONF_SUNDIALS_INC_DIR=$CONF_SUNDIALS_INC_DIR
+CONF_SUNDIALS_LIB_DIR=$CONF_SUNDIALS_LIB_DIR
 
 USE_LUA=$USE_LUA
 

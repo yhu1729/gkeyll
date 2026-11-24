@@ -1421,6 +1421,11 @@ gkyl_gyrokinetic_app_new_solver(struct gkyl_gk *gk, gkyl_gyrokinetic_app *app)
     app->update_func = gyrokinetic_update_ssp_rk3;
   }
 
+  app->extsts = NULL;
+  if (gk->time_stepper.id == GKYL_GK_TIME_STEPPER_EXTSTS) {
+    gyrokinetic_extsts_init(app, gk, has_implicit_coll_scheme);
+  }
+
   // Pre-compute time-independent factors in omega_H.
   gkyl_gyrokinetic_app_omegaH_init(app);
 
@@ -5005,6 +5010,8 @@ gkyl_gyrokinetic_app_release_geom(gkyl_gyrokinetic_app *app)
 void
 gkyl_gyrokinetic_app_release(gkyl_gyrokinetic_app *app)
 {
+  // Release the ExtSTS stepper first: it holds references to the species arrays.
+  gyrokinetic_extsts_release(app);
   gyrokinetic_fdot_args_release(&app->fdot_args);
 
   gkyl_array_release(app->jacobtot_inv_weak);

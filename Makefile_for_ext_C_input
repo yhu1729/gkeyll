@@ -115,6 +115,28 @@ ifdef USING_NVCC
 endif
 endif
 
+# Read SUNDIALS paths and flags if needed. If SUNDIALS was built with MPI its
+# headers include mpi.h, so Gkeyll must then be configured with MPI too.
+USING_SUNDIALS =
+# Dummy include directory.
+SUNDIALS_INC_DIR = zero
+SUNDIALS_LIB_DIR = .
+SUNDIALS_RPATH =
+ifeq (${USE_SUNDIALS}, 1)
+	USING_SUNDIALS = yes
+	SUNDIALS_INC_DIR = ${CONF_SUNDIALS_INC_DIR}
+	SUNDIALS_LIB_DIR = ${CONF_SUNDIALS_LIB_DIR}
+
+ifdef USING_NVCC
+	SUNDIALS_RPATH = -Xlinker "-rpath,${CONF_SUNDIALS_LIB_DIR}"
+else
+	SUNDIALS_RPATH = -Wl,-rpath,${CONF_SUNDIALS_LIB_DIR}
+endif
+
+	SUNDIALS_LIBS = -lsundials_arkode -lsundials_core
+	CFLAGS += -DGKYL_HAVE_SUNDIALS
+endif
+
 # Read LUA paths and flags if needed 
 LUA_RPATH = 
 LUA_INC_DIR = zero # dummy
@@ -128,9 +150,9 @@ ifeq (${USE_LUA}, 1)
 	CFLAGS += -DGKYL_HAVE_LUA
 endif
 
-INCLUDES = -I${G0_INC_DIR} -I${LAPACK_INC_DIR} -I${SUPERLU_INC_DIR} -I${MPI_INC_DIR} -I${LUA_INC_DIR} -I${NCCL_INC_DIR} -I${CUDSS_INC_DIR}
-LIB_DIRS = -L${LAPACK_LIB_DIR} -L${SUPERLU_LIB_DIR} -L${MPI_LIB_DIR} -L${LUA_LIB_DIR} -L${NCCL_LIB_DIR} -L${CUDSS_LIB_DIR}
-EXT_LIBS = ${LAPACK_LIBS} ${SUPERLU_LIBS} ${MPI_RPATH} ${MPI_LIBS} ${LUA_RPATH} ${LUA_LIBS} ${NCCL_LIBS} ${CUDSS_RPATH} ${CUDSS_LIBS} -lm -lpthread -ldl
+INCLUDES = -I${G0_INC_DIR} -I${LAPACK_INC_DIR} -I${SUPERLU_INC_DIR} -I${MPI_INC_DIR} -I${LUA_INC_DIR} -I${NCCL_INC_DIR} -I${CUDSS_INC_DIR} -I${SUNDIALS_INC_DIR}
+LIB_DIRS = -L${LAPACK_LIB_DIR} -L${SUPERLU_LIB_DIR} -L${MPI_LIB_DIR} -L${LUA_LIB_DIR} -L${NCCL_LIB_DIR} -L${CUDSS_LIB_DIR} -L${SUNDIALS_LIB_DIR}
+EXT_LIBS = ${LAPACK_LIBS} ${SUPERLU_LIBS} ${MPI_RPATH} ${MPI_LIBS} ${LUA_RPATH} ${LUA_LIBS} ${NCCL_LIBS} ${CUDSS_RPATH} ${CUDSS_LIBS} ${SUNDIALS_RPATH} ${SUNDIALS_LIBS} -lm -lpthread -ldl
 
 # Find all .c files and generate corresponding executable names
 SRCS := $(wildcard *.c)

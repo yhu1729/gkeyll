@@ -34,6 +34,11 @@ double gk_species_rhs_static(
   struct gkyl_array *rhs, struct gkyl_array **bflux_moms
 );
 
+double gk_species_rhs_diffusive_static(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs
+);
+
 double gk_species_rhs_implicit_static(
   gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
   struct gkyl_array *rhs, struct gkyl_array **bflux_moms, double dt

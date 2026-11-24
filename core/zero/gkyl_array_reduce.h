@@ -37,8 +37,9 @@ void gkyl_array_reduce_range(
  * and backends. For component k, supported formulas over cells i are:
  * MIN/MAX/SUM: min/max/sum(w[i,k]*x[i,k]); ABS_MAX: max(abs(w[i,k]*x[i,k]));
  * SQ_SUM: sum(w[i,k]*x[i,k]^2); CELL_MEAN_SQ_SUM:
- * sum(w[i,k]*(sum_j x[i,j]^2 / ncomp)). The weight appears once in all formulas.
- * CELL_MEAN_SQ_SUM is supported only by the weighted API. This routine does not
+ * sum(w[i,k]*(sum_j x[i,j]^2 / ncomp)); PROD_SQ_SUM: sum((w[i,k]*x[i,k])^2).
+ * The weight appears once in all formulas except PROD_SQ_SUM, where it is squared.
+ * CELL_MEAN_SQ_SUM and PROD_SQ_SUM are supported only by the weighted API. This routine does not
  * take a final square root, normalize over cells, or perform an MPI reduction.
  * Empty reductions return DBL_MAX for MIN, -DBL_MAX for MAX, zero otherwise.
  *

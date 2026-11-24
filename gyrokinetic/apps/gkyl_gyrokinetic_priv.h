@@ -1429,6 +1429,14 @@ struct gk_species {
     gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
     struct gkyl_array *rhs, struct gkyl_array **bflux_moms
   );
+  double (*rhs_explicit_func)(
+    gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+    struct gkyl_array *rhs, struct gkyl_array **bflux_moms
+  );
+  double (*rhs_diffusive_func)(
+    gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+    struct gkyl_array *rhs
+  );
   double (*rhs_implicit_func)(
     gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
     struct gkyl_array *rhs, struct gkyl_array **bflux_moms, double dt
@@ -1917,6 +1925,7 @@ struct gkyl_gyrokinetic_app {
 
   // pointer to function that takes a single-step of simulation
   struct gkyl_update_status (*update_func)(gkyl_gyrokinetic_app *app, double dt0);
+  struct gk_extsts *extsts; // ExtSTS time stepper (NULL when not used).
 
   struct gkyl_gyrokinetic_stat stat; // Statistics.
 
@@ -3932,6 +3941,37 @@ double gk_species_rhs(
 );
 
 /**
+ * Compute the part of the RHS that is advanced explicitly when the LBO
+ * collisions are advanced separately, i.e. every term except the LBO collisions.
+ *
+ * @param app gyrokinetic app object.
+ * @param species Pointer to species.
+ * @param fin Input distribution function.
+ * @param rhs On output, the RHS from the species object.
+ * @param bflux_moms Output boundary flux moments.
+ * @return Maximum stable time-step of the terms included.
+ */
+double gk_species_rhs_explicit(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs, struct gkyl_array **bflux_moms
+);
+
+/**
+ * Compute the diffusive part of the RHS (the LBO collisions), which is
+ * advanced with super time stepping. Requires the LBO moments of fin.
+ *
+ * @param app gyrokinetic app object.
+ * @param species Pointer to species.
+ * @param fin Input distribution function.
+ * @param rhs On output, the LBO collision term.
+ * @return Maximum CFL frequency of the LBO collisions on this MPI rank.
+ */
+double gk_species_rhs_diffusive(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs
+);
+
+/**
  * Compute the *implicit* RHS from species distribution function
  *
  * @param app gyrokinetic app object.
@@ -5324,6 +5364,27 @@ void gyrokinetic_update_implicit_coll(gkyl_gyrokinetic_app *app, double dt0);
  * @param dt0 Suggessted time step.
  */
 struct gkyl_update_status gyrokinetic_update_op_split(gkyl_gyrokinetic_app *app, double dt0);
+
+/**
+ * Set up the SUNDIALS (ARKODE) extended super time stepping (ExtSTS) scheme,
+ * and make it the method that takes a time step. The LBO collisions are super
+ * time stepped, and every other term is advanced explicitly. Exits if Gkeyll
+ * was not built with SUNDIALS, or if the app uses an unsupported feature.
+ *
+ * @param app Gyrokinetic app (its species must already be initialized).
+ * @param gk Gyrokinetic app inputs.
+ * @param has_implicit_coll Whether a species uses implicit (BGK) collisions.
+ */
+void gyrokinetic_extsts_init(
+  gkyl_gyrokinetic_app *app, const struct gkyl_gk *gk, bool has_implicit_coll
+);
+
+/**
+ * Release the ExtSTS time stepper, if the app has one.
+ *
+ * @param app Gyrokinetic app.
+ */
+void gyrokinetic_extsts_release(gkyl_gyrokinetic_app *app);
 
 /**
  * Initialize enforcement of quasineutrality of the guiding centers after

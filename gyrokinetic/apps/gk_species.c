@@ -112,6 +112,15 @@ gk_species_rhs_static(
 }
 
 double
+gk_species_rhs_diffusive_static(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs
+)
+{
+  return 0.0;
+}
+
+double
 gk_species_rhs_implicit_static(
   gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
   struct gkyl_array *rhs, struct gkyl_array **bflux_moms, double dt
@@ -623,6 +632,8 @@ gk_species_init_static(
 
   // Set function pointers.
   gks->rhs_func = gk_species_rhs_static;
+  gks->rhs_explicit_func = gk_species_rhs_static;
+  gks->rhs_diffusive_func = gk_species_rhs_diffusive_static;
   gks->rhs_implicit_func = gk_species_rhs_implicit_static;
   gks->bc_func = gk_species_apply_bc_static;
   gks->release_func = gk_species_release_static;
@@ -708,6 +719,24 @@ gk_species_rhs(
 )
 {
   return species->rhs_func(app, species, fin, rhs, bflux_moms);
+}
+
+double
+gk_species_rhs_explicit(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs, struct gkyl_array **bflux_moms
+)
+{
+  return species->rhs_explicit_func(app, species, fin, rhs, bflux_moms);
+}
+
+double
+gk_species_rhs_diffusive(
+  gkyl_gyrokinetic_app *app, struct gk_species *species, const struct gkyl_array *fin,
+  struct gkyl_array *rhs
+)
+{
+  return species->rhs_diffusive_func(app, species, fin, rhs);
 }
 
 double

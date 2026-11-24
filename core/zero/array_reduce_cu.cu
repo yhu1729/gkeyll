@@ -1050,6 +1050,111 @@ gkyl_array_reduce_weighted_range_sq_sum_cu(
 
 template <unsigned int BLOCKSIZE>
 __global__ void
+arrayProdSqSum_weighted_blockRedAtomic_cub(
+  const struct gkyl_array *inp, const struct gkyl_array *wgt, double *out
+)
+{
+  unsigned long linc = blockIdx.x * blockDim.x + threadIdx.x;
+
+  typedef cub::BlockReduce<double, BLOCKSIZE> BlockReduceT;
+  __shared__ typename BlockReduceT::TempStorage temp;
+
+  long nCells = inp->size;
+  size_t nComp = inp->ncomp;
+
+  const double *inp_d = (const double *)inp->data;
+  const double *wgt_d = (const double *)wgt->data;
+
+  for (size_t k = 0; k < nComp; ++k) {
+    double f = 0;
+    if (linc < nCells) {
+      double prod = wgt_d[linc * nComp + k] * inp_d[linc * nComp + k];
+      f = prod * prod;
+    }
+    array_reduce_block<BLOCKSIZE, GKYL_SUM>(temp, f, &out[k]);
+  }
+}
+
+template <unsigned int BLOCKSIZE>
+__global__ void
+arrayProdSqSum_weighted_range_blockRedAtomic_cub(
+  const struct gkyl_array *inp, const struct gkyl_array *wgt, const struct gkyl_range range,
+  double *out
+)
+{
+  unsigned long linc = blockIdx.x * blockDim.x + threadIdx.x;
+
+  typedef cub::BlockReduce<double, BLOCKSIZE> BlockReduceT;
+  __shared__ typename BlockReduceT::TempStorage temp;
+
+  long nCells = range.volume;
+  size_t nComp = inp->ncomp;
+
+  int idx[GKYL_MAX_DIM];
+
+  for (size_t k = 0; k < nComp; ++k) {
+    const double *fptr = NULL;
+    const double *wptr = NULL;
+    if (linc < nCells) {
+      gkyl_sub_range_inv_idx(&range, linc, idx);
+      long start = gkyl_range_idx(&range, idx);
+      fptr = (const double *)gkyl_array_cfetch(inp, start);
+      wptr = (const double *)gkyl_array_cfetch(wgt, start);
+    }
+    double f = 0;
+    if (linc < nCells) {
+      double prod = wptr[k] * fptr[k];
+      f = prod * prod;
+    }
+    array_reduce_block<BLOCKSIZE, GKYL_SUM>(temp, f, &out[k]);
+  }
+}
+
+void
+gkyl_array_reduce_weighted_prod_sq_sum_cu(
+  double *out_d, const struct gkyl_array *inp, const struct gkyl_array *wgt
+)
+{
+  if (inp->ncomp == 0) {
+    return;
+  }
+  const int nthreads = GKYL_DEFAULT_NUM_THREADS;
+  array_reduce_init_cu_kernel<<<gkyl_int_div_up(inp->ncomp, nthreads), nthreads>>>(
+    out_d, inp->ncomp, 0.0
+  );
+  int nblocks = gkyl_int_div_up(inp->size, nthreads);
+  if (inp->size > 0) {
+    arrayProdSqSum_weighted_blockRedAtomic_cub<nthreads>
+      <<<nblocks, nthreads>>>(inp->on_dev, wgt->on_dev, out_d);
+  }
+  // device synchronize required because out_d may be host pinned memory
+  cudaDeviceSynchronize();
+}
+
+void
+gkyl_array_reduce_weighted_range_prod_sq_sum_cu(
+  double *out_d, const struct gkyl_array *inp, const struct gkyl_array *wgt,
+  const struct gkyl_range *range
+)
+{
+  if (inp->ncomp == 0) {
+    return;
+  }
+  const int nthreads = GKYL_DEFAULT_NUM_THREADS;
+  array_reduce_init_cu_kernel<<<gkyl_int_div_up(inp->ncomp, nthreads), nthreads>>>(
+    out_d, inp->ncomp, 0.0
+  );
+  int nblocks = gkyl_int_div_up(range->volume, nthreads);
+  if (range->volume > 0) {
+    arrayProdSqSum_weighted_range_blockRedAtomic_cub<nthreads>
+      <<<nblocks, nthreads>>>(inp->on_dev, wgt->on_dev, *range, out_d);
+  }
+  // device synchronize required because out_d may be host pinned memory
+  cudaDeviceSynchronize();
+}
+
+template <unsigned int BLOCKSIZE>
+__global__ void
 arrayCellMeanSqSum_weighted_blockRedAtomic_cub(
   const struct gkyl_array *inp, const struct gkyl_array *wgt, double *out
 )
