@@ -401,6 +401,17 @@ struct gk_geometry *gkyl_gk_geometry_deflate(
 void gkyl_gk_geometry_populate_nodal(struct gk_geometry *gk_geom);
 
 /**
+ * Free the nodal arrays (the *_nodal members of geo_corn, geo_int and geo_surf),
+ * which are only needed to compute the modal (expansion) arrays and other
+ * objects built from the geometry. Afterwards they are NULL, and no function
+ * that reads them may be called (e.g. gkyl_gk_geometry_deflate,
+ * gkyl_gk_geometry_new for a device copy, gkyl_gk_dg_geom_populate_vol/surf).
+ *
+ * @param gk_geom Geometry object (on the host or the device).
+ */
+void gkyl_gk_geometry_release_nodal(struct gk_geometry *gk_geom);
+
+/**
  * Write psi(R,Z).
  * @param geometry_inp Geometry input struct.
  * @param io_meta_basic_basic Basic metadata.

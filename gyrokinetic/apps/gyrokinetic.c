@@ -416,6 +416,17 @@ fail:
   return false;
 }
 
+// Free the nodal arrays of the geometry (and of the host geometry kept for the
+// set_gk_geometry callback). Calling it again does nothing.
+static void
+gyrokinetic_release_geometry_nodal(gkyl_gyrokinetic_app *app)
+{
+  gkyl_gk_geometry_release_nodal(app->gk_geom);
+  if (app->gk_geom_ho && app->gk_geom_ho != app->gk_geom) {
+    gkyl_gk_geometry_release_nodal(app->gk_geom_ho);
+  }
+}
+
 gkyl_gyrokinetic_app *
 gyrokinetic_app_new_geom(struct gkyl_gk *gk, bool is_multib)
 {
@@ -1082,6 +1093,13 @@ gyrokinetic_app_new_geom(struct gkyl_gk *gk, bool is_multib)
     gk->geometry.set_gk_geometry(app->gk_geom_ho, gk->geometry.set_gk_geometry_ctx);
   }
 
+  // The nodal geometry arrays were only needed to build the modal geometry, the
+  // DG geometry and the device copy. Free them before the species are allocated,
+  // to lower the peak memory, unless kinetic neutrals still need some of them.
+  if (!app->has_kinetic_neut) {
+    gyrokinetic_release_geometry_nodal(app);
+  }
+
   return app;
 }
 
@@ -1440,6 +1458,9 @@ gkyl_gyrokinetic_app_new_solver(struct gkyl_gk *gk, gkyl_gyrokinetic_app *app)
   app->is_first_dt_write_call = true;
 
   gyrokinetic_fdot_args_init(app);
+
+  // Kinetic neutrals needed some nodal geometry arrays (see gyrokinetic_app_new_geom).
+  gyrokinetic_release_geometry_nodal(app);
 }
 
 gkyl_gyrokinetic_app *

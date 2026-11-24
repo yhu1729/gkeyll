@@ -195,31 +195,40 @@ gk_geometry_surf_alloc_expansions(struct gk_geometry *up, int dir)
     gkyl_array_new(GKYL_DOUBLE, 1 * up->num_surf_basis, up->local_ext.volume);
 }
 
+// Release a geometry array and clear the reference, so that arrays released
+// early (see gkyl_gk_geometry_release_nodal) are not released again.
+static inline void
+gk_geometry_array_release_ref(struct gkyl_array **arr)
+{
+  gkyl_array_release(*arr);
+  *arr = NULL;
+}
+
 static void
 gk_geometry_surf_release_nodal(struct gk_geometry *gk_geom, int dir)
 {
-  gkyl_array_release(gk_geom->geo_surf[dir].mc2p_nodal_fd);
-  gkyl_array_release(gk_geom->geo_surf[dir].mc2p_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].bmag_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].curlbhat_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].normcurlbhat_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].ddtheta_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].ddpsi_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].jacobgeo_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].b_i_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].b_i_nodal_fd);
-  gkyl_array_release(gk_geom->geo_surf[dir].cmag_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].jacobtot_inv_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].g_ij_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].dxdz_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].dzdx_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].normals_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].dualmag_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].bcart_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].B3_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].lenr_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].bimpactangle_nodal);
-  gkyl_array_release(gk_geom->geo_surf[dir].deltats_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].mc2p_nodal_fd);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].mc2p_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].bmag_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].curlbhat_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].normcurlbhat_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].ddtheta_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].ddpsi_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].jacobgeo_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].b_i_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].b_i_nodal_fd);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].cmag_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].jacobtot_inv_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].g_ij_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].dxdz_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].dzdx_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].normals_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].dualmag_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].bcart_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].B3_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].lenr_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].bimpactangle_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_surf[dir].deltats_nodal);
 }
 
 static void
@@ -301,29 +310,29 @@ gk_geometry_int_alloc_expansions(struct gk_geometry *up)
 static void
 gk_geometry_int_release_nodal(struct gk_geometry *gk_geom)
 {
-  gkyl_array_release(gk_geom->geo_int.mc2p_nodal_fd);
-  gkyl_array_release(gk_geom->geo_int.mc2p_nodal);
-  gkyl_array_release(gk_geom->geo_int.bmag_nodal);
-  gkyl_array_release(gk_geom->geo_int.ddtheta_nodal);
-  gkyl_array_release(gk_geom->geo_int.ddpsi_nodal);
-  gkyl_array_release(gk_geom->geo_int.curlbhat_nodal);
-  gkyl_array_release(gk_geom->geo_int.dualcurlbhat_nodal);
-  gkyl_array_release(gk_geom->geo_int.jacobgeo_nodal);
-  gkyl_array_release(gk_geom->geo_int.g_ij_nodal);
-  gkyl_array_release(gk_geom->geo_int.g_ij_neut_nodal);
-  gkyl_array_release(gk_geom->geo_int.dxdz_nodal);
-  gkyl_array_release(gk_geom->geo_int.dxdz_grad_nodal);
-  gkyl_array_release(gk_geom->geo_int.dzdx_nodal);
-  gkyl_array_release(gk_geom->geo_int.dualmag_nodal);
-  gkyl_array_release(gk_geom->geo_int.normals_nodal);
-  gkyl_array_release(gk_geom->geo_int.gij_neut_nodal);
-  gkyl_array_release(gk_geom->geo_int.b_i_nodal);
-  gkyl_array_release(gk_geom->geo_int.b_i_nodal_fd);
-  gkyl_array_release(gk_geom->geo_int.bcart_nodal);
-  gkyl_array_release(gk_geom->geo_int.B3_nodal);
-  gkyl_array_release(gk_geom->geo_int.dualcurlbhatoverB_nodal);
-  gkyl_array_release(gk_geom->geo_int.B3overB_nodal);
-  gkyl_array_release(gk_geom->geo_int.bioverJB_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.mc2p_nodal_fd);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.mc2p_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.bmag_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.ddtheta_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.ddpsi_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.curlbhat_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.dualcurlbhat_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.jacobgeo_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.g_ij_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.g_ij_neut_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.dxdz_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.dxdz_grad_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.dzdx_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.dualmag_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.normals_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.gij_neut_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.b_i_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.b_i_nodal_fd);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.bcart_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.B3_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.dualcurlbhatoverB_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.B3overB_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_int.bioverJB_nodal);
 }
 
 static void
@@ -355,9 +364,9 @@ gk_geometry_corn_alloc_expansions(struct gk_geometry *up)
 static void
 gk_geometry_corn_release_nodal(struct gk_geometry *gk_geom)
 {
-  gkyl_array_release(gk_geom->geo_corn.mc2p_nodal);
-  gkyl_array_release(gk_geom->geo_corn.mc2nu_pos_nodal);
-  gkyl_array_release(gk_geom->geo_corn.bmag_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_corn.mc2p_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_corn.mc2nu_pos_nodal);
+  gk_geometry_array_release_ref(&gk_geom->geo_corn.bmag_nodal);
 }
 
 static void

@@ -661,7 +661,9 @@ struct gkyl_gyrokinetic_metadata_inp {
 enum gkyl_gyrokinetic_time_stepper_id {
   GKYL_GK_TIME_STEPPER_SSP_RK3 = 0, // SSP-RK3 (default).
   // SUNDIALS (ARKODE) extended super time stepping: the LBO collisions are
-  // super time stepped, and every other term is advanced explicitly.
+  // super time stepped, and every other term is advanced explicitly. Kinetic
+  // species then have no fnew array, and their f1 array is freed after the
+  // first time step (SUNDIALS keeps its own work vectors).
   GKYL_GK_TIME_STEPPER_EXTSTS,
 };
 

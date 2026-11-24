@@ -196,6 +196,16 @@ gkyl_gk_geometry_reset_io_meta(struct gk_geometry *up)
 }
 
 void
+gkyl_gk_geometry_release_nodal(struct gk_geometry *gk_geom)
+{
+  gk_geometry_corn_release_nodal(gk_geom);
+  gk_geometry_int_release_nodal(gk_geom);
+  for (int dir = 0; dir < gk_geom->grid.ndim; ++dir) {
+    gk_geometry_surf_release_nodal(gk_geom, dir);
+  }
+}
+
+void
 gkyl_gk_geometry_populate_nodal(struct gk_geometry *gk_geom)
 {
   // Populate nodal arrays for vpar surface terms

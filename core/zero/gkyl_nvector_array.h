@@ -37,8 +37,10 @@ struct gkyl_nvector_array_mem_stats {
   long num_peak; // Largest number of vectors alive at the same time.
   long num_created; // Vectors created so far (the _inew vector and every clone).
   long num_unwritten; // Live vectors that have never been written to.
+  long num_allocated; // Live vectors whose arrays are allocated (including the _inew one).
+  long num_allocated_peak; // Largest number of vectors allocated at the same time.
   size_t vec_bytes; // Bytes of array data in one vector.
-  size_t bytes_live; // Bytes of array data in the live vectors.
+  size_t bytes_live; // Bytes of array data in the allocated vectors.
   size_t bytes_peak; // Largest bytes_live reached.
   bool use_gpu; // Whether the array data lives on the device.
 };
@@ -46,7 +48,9 @@ struct gkyl_nvector_array_mem_stats {
 /**
  * Create a new N_Vector that wraps the input arrays. The vector acquires the
  * arrays and the communicator, and copies the ranges. Vectors cloned from it
- * (e.g. by a SUNDIALS integrator) allocate their own arrays on the same backend.
+ * (e.g. by a SUNDIALS integrator) allocate their own arrays on the same backend,
+ * zeroed, when their data is first accessed (by a vector operation, a reduction,
+ * or gkyl_nvector_array_get/cget). So a clone that is never used takes no array memory.
  *
  * @param inp Input parameters defined in gkyl_nvector_array_inp struct.
  * @param sunctx SUNDIALS context the vector belongs to.
@@ -65,7 +69,8 @@ N_Vector gkyl_nvector_array_inew(const struct gkyl_nvector_array_inp *inp, SUNCo
 struct gkyl_array *gkyl_nvector_array_get(N_Vector vec, int idx);
 
 /**
- * Get an array of the vector for reading. The vector keeps ownership.
+ * Get an array of the vector for reading. The vector keeps ownership. This
+ * allocates the arrays of a clone that has not been used yet.
  *
  * @param vec Array N_Vector.
  * @param idx Index of the array in the vector.
@@ -92,8 +97,8 @@ struct gkyl_nvector_array_mem_stats gkyl_nvector_array_get_mem_stats(N_Vector ve
 
 /**
  * Check whether a vector has ever been written to, by a vector operation or
- * through gkyl_nvector_array_get. A clone that is never written is memory a
- * SUNDIALS integrator allocated without using.
+ * through gkyl_nvector_array_get. A clone that is read but never written holds
+ * zeros; one that is never accessed has no array memory.
  *
  * @param vec Array N_Vector.
  * @return True if the vector has been written to.

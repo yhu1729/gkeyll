@@ -13,19 +13,27 @@
 
 _Static_assert(sizeof(sunrealtype) == sizeof(double), "SUNDIALS must use double precision");
 
-// Memory bookkeeping shared by a vector and all the vectors cloned from it.
+// Memory bookkeeping, and shape of the arrays, shared by a vector and all the
+// vectors cloned from it.
 struct nvarr_mem_monitor {
   long num_live; // Vectors alive now (also the reference count of this struct).
   long num_peak; // Largest number of vectors alive at the same time.
   long num_created; // Vectors created so far.
   long num_unwritten; // Live vectors that have never been written to.
+  long num_allocated; // Live vectors whose arrays are allocated.
+  long num_allocated_peak; // Largest number of vectors allocated at the same time.
   size_t vec_bytes; // Bytes of array data in one vector.
-  size_t bytes_peak; // Largest number of bytes alive at the same time.
+  size_t bytes_peak; // Largest number of bytes allocated at the same time.
+  int num_arrays; // Number of arrays in each vector.
+  size_t *ncomp; // Number of components of each array.
+  size_t *size; // Number of cells of each array.
 };
 
+// A clone allocates its arrays when they are first accessed, so a work vector
+// that a SUNDIALS integrator creates but never uses takes no array memory.
 struct nvarr_content {
   int num_arrays; // Number of arrays.
-  struct gkyl_array **arrays; // Arrays holding the data (owned references).
+  struct gkyl_array **arrays; // Arrays holding the data (owned references; NULL until allocated).
   struct gkyl_range *ranges; // Range each array is reduced over.
   struct gkyl_comm *comm; // Communicator used to reduce across ranks.
   bool use_gpu; // Whether the arrays live on the device.
@@ -33,14 +41,52 @@ struct nvarr_content {
   size_t max_ncomp; // Largest number of components among the arrays.
   double *red_buffer; // Per-component reductions, on the backend of the arrays.
   double *red_buffer_ho; // Per-component reductions on the host.
+  bool is_allocated; // Whether the arrays are allocated.
   bool is_written; // Whether the data has been written to.
   struct nvarr_mem_monitor *monitor; // Memory bookkeeping of the family of clones.
 };
+
+static void
+nvarr_monitor_count_allocated(struct nvarr_mem_monitor *monitor)
+{
+  monitor->num_allocated += 1;
+  monitor->num_allocated_peak = GKYL_MAX2(monitor->num_allocated_peak, monitor->num_allocated);
+  monitor->bytes_peak =
+    GKYL_MAX2(monitor->bytes_peak, monitor->num_allocated * monitor->vec_bytes);
+}
+
+// Allocate the arrays of a clone, zeroed: elementwise operations also act on
+// ghost cells, so every cell must hold a valid number.
+static void
+nvarr_alloc_arrays(struct nvarr_content *content)
+{
+  const struct nvarr_mem_monitor *monitor = content->monitor;
+  for (int i = 0; i < content->num_arrays; ++i) {
+    content->arrays[i] =
+      content->use_gpu ? gkyl_array_cu_dev_new(GKYL_DOUBLE, monitor->ncomp[i], monitor->size[i]) :
+                         gkyl_array_new(GKYL_DOUBLE, monitor->ncomp[i], monitor->size[i]);
+    gkyl_array_clear(content->arrays[i], 0.0);
+  }
+  content->is_allocated = true;
+  nvarr_monitor_count_allocated(content->monitor);
+}
 
 static inline struct nvarr_content *
 nvarr_get_content(N_Vector vec)
 {
   return vec->content;
+}
+
+// Content of a vector whose arrays are about to be read or written: allocates
+// the arrays on the first access.
+static inline struct nvarr_content *
+nvarr_get_content_data(N_Vector vec)
+{
+  struct nvarr_content *content = vec->content;
+  if (!content->is_allocated) {
+    nvarr_alloc_arrays(content);
+  }
+  return content;
 }
 
 static inline void
@@ -59,7 +105,14 @@ nvarr_monitor_add(struct nvarr_mem_monitor *monitor, bool is_written)
   monitor->num_created += 1;
   monitor->num_unwritten += is_written ? 0 : 1;
   monitor->num_peak = GKYL_MAX2(monitor->num_peak, monitor->num_live);
-  monitor->bytes_peak = GKYL_MAX2(monitor->bytes_peak, monitor->num_live * monitor->vec_bytes);
+}
+
+static void
+nvarr_monitor_release(struct nvarr_mem_monitor *monitor)
+{
+  gkyl_free(monitor->size);
+  gkyl_free(monitor->ncomp);
+  gkyl_free(monitor);
 }
 
 // Allocate the parts of the content that do not depend on who owns the arrays.
@@ -101,18 +154,15 @@ nvarr_clone(N_Vector vec)
     return NULL;
   }
 
+  // The arrays are allocated on first access (see nvarr_get_content_data).
   struct nvarr_content *clone_content =
     nvarr_content_new(content->num_arrays, content->comm, content->use_gpu, content->max_ncomp);
   for (int i = 0; i < content->num_arrays; ++i) {
-    const struct gkyl_array *arr = content->arrays[i];
-    clone_content->arrays[i] = content->use_gpu ?
-                                 gkyl_array_cu_dev_new(arr->type, arr->ncomp, arr->size) :
-                                 gkyl_array_new(arr->type, arr->ncomp, arr->size);
-    // Elementwise operations read ghost cells, so they must hold valid numbers.
-    gkyl_array_clear(clone_content->arrays[i], 0.0);
+    clone_content->arrays[i] = NULL;
     clone_content->ranges[i] = content->ranges[i];
   }
   clone_content->global_length = content->global_length;
+  clone_content->is_allocated = false;
   clone_content->is_written = false;
   clone_content->monitor = content->monitor;
   nvarr_monitor_add(clone_content->monitor, false);
@@ -133,12 +183,13 @@ nvarr_destroy(N_Vector vec)
     struct nvarr_mem_monitor *monitor = content->monitor;
     monitor->num_live -= 1;
     monitor->num_unwritten -= content->is_written ? 0 : 1;
+    monitor->num_allocated -= content->is_allocated ? 1 : 0;
     if (monitor->num_live == 0) {
-      gkyl_free(monitor);
+      nvarr_monitor_release(monitor);
     }
 
     for (int i = 0; i < content->num_arrays; ++i) {
-      gkyl_array_release(content->arrays[i]);
+      gkyl_array_release(content->arrays[i]); // NULL if never allocated.
     }
     if (content->use_gpu) {
       gkyl_cu_free(content->red_buffer);
@@ -164,9 +215,9 @@ nvarr_get_length(N_Vector vec)
 static void
 nvarr_linear_sum(sunrealtype coeff_x, N_Vector x, sunrealtype coeff_y, N_Vector y, N_Vector out)
 {
-  const struct nvarr_content *x_content = nvarr_get_content(x);
-  const struct nvarr_content *y_content = nvarr_get_content(y);
-  struct nvarr_content *out_content = nvarr_get_content(out);
+  const struct nvarr_content *x_content = nvarr_get_content_data(x);
+  const struct nvarr_content *y_content = nvarr_get_content_data(y);
+  struct nvarr_content *out_content = nvarr_get_content_data(out);
 
   for (int i = 0; i < out_content->num_arrays; ++i) {
     const struct gkyl_array *x_arr = x_content->arrays[i];
@@ -187,7 +238,7 @@ nvarr_linear_sum(sunrealtype coeff_x, N_Vector x, sunrealtype coeff_y, N_Vector 
 static void
 nvarr_const(sunrealtype val, N_Vector out)
 {
-  struct nvarr_content *out_content = nvarr_get_content(out);
+  struct nvarr_content *out_content = nvarr_get_content_data(out);
 
   for (int i = 0; i < out_content->num_arrays; ++i) {
     gkyl_array_clear(out_content->arrays[i], val);
@@ -199,9 +250,9 @@ nvarr_const(sunrealtype val, N_Vector out)
 static void
 nvarr_comp_op(enum gkyl_array_op op, N_Vector x, N_Vector y, N_Vector out)
 {
-  const struct nvarr_content *x_content = nvarr_get_content(x);
-  const struct nvarr_content *y_content = y ? nvarr_get_content(y) : NULL;
-  struct nvarr_content *out_content = nvarr_get_content(out);
+  const struct nvarr_content *x_content = nvarr_get_content_data(x);
+  const struct nvarr_content *y_content = y ? nvarr_get_content_data(y) : NULL;
+  struct nvarr_content *out_content = nvarr_get_content_data(out);
 
   for (int i = 0; i < out_content->num_arrays; ++i) {
     gkyl_array_comp_op(
@@ -239,8 +290,8 @@ nvarr_inv(N_Vector x, N_Vector out)
 static void
 nvarr_scale(sunrealtype fac, N_Vector x, N_Vector out)
 {
-  const struct nvarr_content *x_content = nvarr_get_content(x);
-  struct nvarr_content *out_content = nvarr_get_content(out);
+  const struct nvarr_content *x_content = nvarr_get_content_data(x);
+  struct nvarr_content *out_content = nvarr_get_content_data(out);
 
   for (int i = 0; i < out_content->num_arrays; ++i) {
     if (out_content->arrays[i] == x_content->arrays[i]) {
@@ -255,8 +306,8 @@ nvarr_scale(sunrealtype fac, N_Vector x, N_Vector out)
 static void
 nvarr_add_const(N_Vector x, sunrealtype val, N_Vector out)
 {
-  const struct nvarr_content *x_content = nvarr_get_content(x);
-  struct nvarr_content *out_content = nvarr_get_content(out);
+  const struct nvarr_content *x_content = nvarr_get_content_data(x);
+  struct nvarr_content *out_content = nvarr_get_content_data(out);
 
   for (int i = 0; i < out_content->num_arrays; ++i) {
     struct gkyl_array *out_arr = out_content->arrays[i];
@@ -329,27 +380,28 @@ nvarr_reduce(
 static sunrealtype
 nvarr_dot_prod(N_Vector x, N_Vector y)
 {
-  return nvarr_reduce(nvarr_get_content(x), nvarr_get_content(y), GKYL_SUM, GKYL_SUM);
+  return nvarr_reduce(nvarr_get_content_data(x), nvarr_get_content_data(y), GKYL_SUM, GKYL_SUM);
 }
 
 static sunrealtype
 nvarr_max_norm(N_Vector x)
 {
-  return nvarr_reduce(nvarr_get_content(x), NULL, GKYL_ABS_MAX, GKYL_MAX);
+  return nvarr_reduce(nvarr_get_content_data(x), NULL, GKYL_ABS_MAX, GKYL_MAX);
 }
 
 static sunrealtype
 nvarr_min(N_Vector x)
 {
-  return nvarr_reduce(nvarr_get_content(x), NULL, GKYL_MIN, GKYL_MIN);
+  return nvarr_reduce(nvarr_get_content_data(x), NULL, GKYL_MIN, GKYL_MIN);
 }
 
 // sqrt(sum_i (x_i*wgt_i)^2 / N), with N the global length.
 static sunrealtype
 nvarr_wrms_norm(N_Vector x, N_Vector wgt)
 {
-  const struct nvarr_content *x_content = nvarr_get_content(x);
-  double sq_sum = nvarr_reduce(x_content, nvarr_get_content(wgt), GKYL_PROD_SQ_SUM, GKYL_SUM);
+  const struct nvarr_content *x_content = nvarr_get_content_data(x);
+  double sq_sum =
+    nvarr_reduce(x_content, nvarr_get_content_data(wgt), GKYL_PROD_SQ_SUM, GKYL_SUM);
   return sqrt(sq_sum / x_content->global_length);
 }
 
@@ -390,25 +442,33 @@ gkyl_nvector_array_inew(const struct gkyl_nvector_array_inp *inp, SUNContext sun
 
   struct nvarr_content *content = nvarr_content_new(inp->num_arrays, inp->comm, use_gpu, max_ncomp);
 
+  struct nvarr_mem_monitor *monitor = gkyl_malloc(sizeof(*monitor));
+  *monitor = (struct nvarr_mem_monitor){
+    .num_arrays = inp->num_arrays,
+    .ncomp = gkyl_malloc(inp->num_arrays * sizeof(size_t)),
+    .size = gkyl_malloc(inp->num_arrays * sizeof(size_t)),
+  };
+
   int64_t local_length = 0;
-  size_t vec_bytes = 0;
   for (int i = 0; i < inp->num_arrays; ++i) {
     content->arrays[i] = gkyl_array_acquire(inp->arrays[i]);
     content->ranges[i] = *inp->ranges[i];
     local_length += inp->ranges[i]->volume * (int64_t)inp->arrays[i]->ncomp;
-    vec_bytes += inp->arrays[i]->size * inp->arrays[i]->esznc;
+    monitor->ncomp[i] = inp->arrays[i]->ncomp;
+    monitor->size[i] = inp->arrays[i]->size;
+    monitor->vec_bytes += inp->arrays[i]->size * inp->arrays[i]->esznc;
   }
   content->global_length = local_length;
   gkyl_comm_allreduce_host(
     content->comm, GKYL_INT_64, GKYL_SUM, 1, &local_length, &content->global_length
   );
 
-  struct nvarr_mem_monitor *monitor = gkyl_malloc(sizeof(*monitor));
-  *monitor = (struct nvarr_mem_monitor){.vec_bytes = vec_bytes};
   content->monitor = monitor;
-  // The wrapped arrays hold the caller's data, so they count as written.
+  // The wrapped arrays hold the caller's data, so they count as allocated and written.
+  content->is_allocated = true;
   content->is_written = true;
   nvarr_monitor_add(monitor, true);
+  nvarr_monitor_count_allocated(monitor);
 
   vec->content = content;
   return vec;
@@ -417,7 +477,7 @@ gkyl_nvector_array_inew(const struct gkyl_nvector_array_inp *inp, SUNContext sun
 struct gkyl_array *
 gkyl_nvector_array_get(N_Vector vec, int idx)
 {
-  struct nvarr_content *content = nvarr_get_content(vec);
+  struct nvarr_content *content = nvarr_get_content_data(vec);
   assert(idx >= 0 && idx < content->num_arrays);
   nvarr_mark_written(content);
   return content->arrays[idx];
@@ -426,7 +486,7 @@ gkyl_nvector_array_get(N_Vector vec, int idx)
 const struct gkyl_array *
 gkyl_nvector_array_cget(N_Vector vec, int idx)
 {
-  const struct nvarr_content *content = nvarr_get_content(vec);
+  const struct nvarr_content *content = nvarr_get_content_data(vec);
   assert(idx >= 0 && idx < content->num_arrays);
   return content->arrays[idx];
 }
@@ -448,8 +508,10 @@ gkyl_nvector_array_get_mem_stats(N_Vector vec)
     .num_peak = monitor->num_peak,
     .num_created = monitor->num_created,
     .num_unwritten = monitor->num_unwritten,
+    .num_allocated = monitor->num_allocated,
+    .num_allocated_peak = monitor->num_allocated_peak,
     .vec_bytes = monitor->vec_bytes,
-    .bytes_live = monitor->num_live * monitor->vec_bytes,
+    .bytes_live = monitor->num_allocated * monitor->vec_bytes,
     .bytes_peak = monitor->bytes_peak,
     .use_gpu = content->use_gpu,
   };
@@ -466,7 +528,8 @@ gkyl_nvector_array_reset_mem_peak(N_Vector vec)
 {
   struct nvarr_mem_monitor *monitor = nvarr_get_content(vec)->monitor;
   monitor->num_peak = monitor->num_live;
-  monitor->bytes_peak = monitor->num_live * monitor->vec_bytes;
+  monitor->num_allocated_peak = monitor->num_allocated;
+  monitor->bytes_peak = monitor->num_allocated * monitor->vec_bytes;
 }
 
 void

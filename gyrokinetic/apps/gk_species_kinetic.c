@@ -424,9 +424,13 @@ gk_species_kinetic_init_dynamic(
   }
   gks->dt_omegaH = DBL_MIN;
 
-  // Allocate distribution function arrays.
+  // Allocate distribution function arrays. f1 is also a buffer during
+  // initialization. The ExtSTS time stepper does not use fnew (and frees f1
+  // after its first step), since SUNDIALS keeps its own work vectors.
   gks->f1 = mkarr(app->use_gpu, gks->basis.num_basis, gks->local_ext.volume);
-  gks->fnew = mkarr(app->use_gpu, gks->basis.num_basis, gks->local_ext.volume);
+  gks->fnew = gk_app_inp->time_stepper.id == GKYL_GK_TIME_STEPPER_EXTSTS ?
+                NULL :
+                mkarr(app->use_gpu, gks->basis.num_basis, gks->local_ext.volume);
 
   gks->omega_cfl = gkyl_calloc_hodev(app->use_gpu, 1, sizeof(double));
   gks->m0_max = gkyl_calloc_hodev(app->use_gpu, app->basis.num_basis, sizeof(double));

@@ -323,11 +323,13 @@ nvector_array_mem_stats_test(bool use_gpu)
   struct nvarr_fixture fix;
   fixture_init(&fix, use_gpu);
 
-  // y is the only member of its family; x has one clone (out).
+  // y is the only member of its family; x has one clone (out), never used, so
+  // its arrays are not allocated.
   size_t vec_bytes = (30 * 3 + 4 * 2) * sizeof(double);
   struct gkyl_nvector_array_mem_stats stats = gkyl_nvector_array_get_mem_stats(fix.y);
   TEST_CHECK(stats.num_live == 1 && stats.num_peak == 1 && stats.num_created == 1);
   TEST_CHECK(stats.num_unwritten == 0);
+  TEST_CHECK(stats.num_allocated == 1 && stats.num_allocated_peak == 1);
   TEST_CHECK(stats.vec_bytes == vec_bytes);
   TEST_CHECK(stats.bytes_live == vec_bytes && stats.bytes_peak == vec_bytes);
   TEST_CHECK(stats.use_gpu == use_gpu);
@@ -335,6 +337,7 @@ nvector_array_mem_stats_test(bool use_gpu)
   stats = gkyl_nvector_array_get_mem_stats(fix.x);
   TEST_CHECK(stats.num_live == 2 && stats.num_peak == 2 && stats.num_created == 2);
   TEST_CHECK(stats.num_unwritten == 1);
+  TEST_CHECK(stats.num_allocated == 1 && stats.bytes_live == vec_bytes);
 
   // Clones (also of clones) join the family; any member reports the same numbers.
   N_Vector clone1 = N_VClone(fix.x);
@@ -342,31 +345,40 @@ nvector_array_mem_stats_test(bool use_gpu)
   stats = gkyl_nvector_array_get_mem_stats(clone2);
   TEST_CHECK(stats.num_live == 4 && stats.num_peak == 4 && stats.num_created == 4);
   TEST_CHECK(stats.num_unwritten == 3);
-  TEST_CHECK(stats.bytes_live == 4 * vec_bytes && stats.bytes_peak == 4 * vec_bytes);
+  TEST_CHECK(stats.num_allocated == 1 && stats.num_allocated_peak == 1);
+  TEST_CHECK(stats.bytes_live == vec_bytes && stats.bytes_peak == vec_bytes);
 
-  // Reading does not count as writing; vector operations and write access do.
+  // Accessing the data allocates it (zeroed); reading does not count as writing.
   gkyl_nvector_array_cget(clone1, 0);
-  N_VMaxNorm(clone1);
-  TEST_CHECK(gkyl_nvector_array_get_mem_stats(fix.x).num_unwritten == 3);
-  TEST_CHECK(!gkyl_nvector_array_is_written(clone1));
+  TEST_CHECK(N_VMaxNorm(clone1) == 0.0);
+  stats = gkyl_nvector_array_get_mem_stats(fix.x);
+  TEST_CHECK(stats.num_unwritten == 3 && !gkyl_nvector_array_is_written(clone1));
+  TEST_CHECK(stats.num_allocated == 2 && stats.bytes_live == 2 * vec_bytes);
   N_VConst(1.0, clone1);
   N_VConst(2.0, clone1);
   TEST_CHECK(gkyl_nvector_array_is_written(clone1));
   TEST_CHECK(gkyl_nvector_array_is_written(fix.x));
   TEST_CHECK(gkyl_nvector_array_get_mem_stats(fix.x).num_unwritten == 2);
-  gkyl_nvector_array_get(clone2, 1);
-  TEST_CHECK(gkyl_nvector_array_get_mem_stats(fix.x).num_unwritten == 1);
+  TEST_CHECK(gkyl_nvector_array_get_mem_stats(fix.x).num_allocated == 2);
+  // A clone of an unallocated clone gets the shapes of the family.
+  const struct gkyl_array *arr = gkyl_nvector_array_get(clone2, 1);
+  TEST_CHECK(arr->ncomp == 2 && arr->size == 4 && gkyl_array_is_cu_dev(arr) == use_gpu);
+  stats = gkyl_nvector_array_get_mem_stats(fix.x);
+  TEST_CHECK(stats.num_unwritten == 1);
+  TEST_CHECK(stats.num_allocated == 3 && stats.num_allocated_peak == 3);
 
   // Destroying vectors lowers the live counts but not the peaks.
   N_VDestroy(clone1);
   stats = gkyl_nvector_array_get_mem_stats(fix.x);
   TEST_CHECK(stats.num_live == 3 && stats.num_peak == 4 && stats.num_created == 4);
   TEST_CHECK(stats.num_unwritten == 1);
-  TEST_CHECK(stats.bytes_live == 3 * vec_bytes && stats.bytes_peak == 4 * vec_bytes);
+  TEST_CHECK(stats.num_allocated == 2 && stats.num_allocated_peak == 3);
+  TEST_CHECK(stats.bytes_live == 2 * vec_bytes && stats.bytes_peak == 3 * vec_bytes);
 
   gkyl_nvector_array_reset_mem_peak(fix.x);
   stats = gkyl_nvector_array_get_mem_stats(fix.x);
-  TEST_CHECK(stats.num_peak == 3 && stats.bytes_peak == 3 * vec_bytes);
+  TEST_CHECK(stats.num_peak == 3 && stats.num_allocated_peak == 2);
+  TEST_CHECK(stats.bytes_peak == 2 * vec_bytes);
 
   // The bookkeeping outlives the vector the family started from.
   N_Vector root = fix.x;
@@ -374,8 +386,8 @@ nvector_array_mem_stats_test(bool use_gpu)
   N_VDestroy(root);
   stats = gkyl_nvector_array_get_mem_stats(clone2);
   TEST_CHECK(stats.num_live == 2 && stats.num_created == 4);
-  // Only out has never been written.
-  TEST_CHECK(stats.num_unwritten == 1);
+  // Only out has never been written, nor allocated.
+  TEST_CHECK(stats.num_unwritten == 1 && stats.num_allocated == 1);
 
   fixture_release(&fix);
 }
@@ -469,7 +481,11 @@ nvector_array_extsts_test(bool use_gpu)
 
     // The integrator cloned work vectors, and released them all when freed.
     TEST_CHECK(stats.num_peak > 2 && stats.num_live <= stats.num_peak);
-    TEST_CHECK(stats.bytes_peak == stats.num_peak * stats.vec_bytes);
+    TEST_CHECK(stats.num_allocated_peak > 2 && stats.num_allocated_peak <= stats.num_peak);
+    TEST_CHECK(stats.bytes_peak == stats.num_allocated_peak * stats.vec_bytes);
+    TEST_MSG(
+      "%ld vectors alive at the peak, %ld allocated", stats.num_peak, stats.num_allocated_peak
+    );
     TEST_CHECK(gkyl_nvector_array_get_mem_stats(fix.y).num_live == 2);
     gkyl_nvector_array_reset_mem_peak(fix.y);
   }

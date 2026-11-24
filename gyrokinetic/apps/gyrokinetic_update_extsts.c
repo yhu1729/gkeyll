@@ -468,6 +468,17 @@ gyrokinetic_update_extsts_first(gkyl_gyrokinetic_app *app, double dt0)
   extsts_rhs_explicit(app->tcurr, ext->state, rhs, app);
   gkyl_nvector_array_release(rhs);
 
+  // That was the last use of f1 by an evolving species (it is also a buffer
+  // during initialization and restarts): free it, as SUNDIALS keeps its own
+  // work vectors. Static species alias f1 to f.
+  for (int i = 0; i < app->num_species; ++i) {
+    struct gk_species *gks = &app->species[i];
+    if (ext->f_idx[i] >= 0) {
+      gkyl_array_release(gks->f1);
+      gks->f1 = NULL;
+    }
+  }
+
   if (ext->adaptive) {
     // The tolerances are set from the initial (or restart) state, and the
     // first attempted step is the stable time step of the explicit terms.
@@ -633,9 +644,10 @@ gyrokinetic_extsts_release(gkyl_gyrokinetic_app *app)
   );
   gkyl_gyrokinetic_app_cout(
     app, stdout,
-    "ExtSTS: at most %ld state vectors alive (%ld now, %ld never written), %.4g MB each, "
-    "%.4g MB at the peak.\n",
-    mem.num_peak, mem.num_live, mem.num_unwritten, mem.vec_bytes / 1.0e6, mem.bytes_peak / 1.0e6
+    "ExtSTS: at most %ld state vectors alive and %ld allocated (now %ld alive, %ld never "
+    "written), %.4g MB each, %.4g MB allocated at the peak.\n",
+    mem.num_peak, mem.num_allocated_peak, mem.num_live, mem.num_unwritten, mem.vec_bytes / 1.0e6,
+    mem.bytes_peak / 1.0e6
   );
   if (ext->adaptive) {
     long num_attempts = 0, num_err_fails = 0, num_exp_limited = 0, num_acc_limited = 0;
